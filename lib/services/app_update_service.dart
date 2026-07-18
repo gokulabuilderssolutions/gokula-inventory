@@ -1,11 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'update_preferences.dart';
 
 class AppUpdateInfo {
   const AppUpdateInfo({
@@ -73,6 +76,26 @@ class AppUpdateService {
     );
   }
 
+
+  static Future<bool> isOnWifi() async {
+    final results = await Connectivity().checkConnectivity();
+    return results.contains(ConnectivityResult.wifi);
+  }
+
+  static Future<File?> getDownloadedApk(String version) async {
+    final savedVersion = await UpdatePreferences.downloadedVersion();
+    final savedPath = await UpdatePreferences.downloadedPath();
+    if (savedVersion != version || savedPath == null || savedPath.isEmpty) {
+      return null;
+    }
+    final file = File(savedPath);
+    if (!await file.exists()) {
+      await UpdatePreferences.clearDownloadedUpdate();
+      return null;
+    }
+    return file;
+  }
+
   static Future<File> downloadApk(
     AppUpdateInfo update, {
     required ValueChanged<double> onProgress,
@@ -101,6 +124,10 @@ class AppUpdateService {
     }
 
     onProgress(1);
+    await UpdatePreferences.rememberDownloadedUpdate(
+      version: update.version,
+      path: file.path,
+    );
     return file;
   }
 
