@@ -11,18 +11,30 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: subosito/flutter-action@v2
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
       - name: Restore signing key
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" \
+          | base64 --decode \
+          > android/app/upload-keystore.jks
 
-      - name: Get packages
+      - name: Verify signing key exists
+        run: |
+          test -s android/app/upload-keystore.jks
+          ls -lh android/app/upload-keystore.jks
+
+      - name: Get Flutter packages
         run: flutter pub get
 
       - name: Build signed APK
@@ -34,7 +46,9 @@ jobs:
         run: flutter build apk --release
 
       - name: Rename APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk gokula-inventory-${GITHUB_REF_NAME}.apk
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+          "gokula-inventory-${GITHUB_REF_NAME}.apk"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
