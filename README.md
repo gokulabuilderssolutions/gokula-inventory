@@ -53,3 +53,8 @@ This package is source code. An APK cannot be compiled without the Android SDK a
 The app now includes offline sales, customer entry, GST calculation, automatic stock deduction, sales history and PDF invoice sharing.
 
 To sync sales to Supabase, run `supabase_sales_schema.sql` in the Supabase SQL Editor. Until then, sales remain safely stored offline and show as pending.
+
+## Added features
+- Image-wise inventory PDF export: open Inventory and tap the PDF icon.
+- Edit sales: open Sales, tap the three-dot menu on an invoice, and choose Edit sale.
+- Editing a sale automatically restores the old stock and deducts the revised quantities.

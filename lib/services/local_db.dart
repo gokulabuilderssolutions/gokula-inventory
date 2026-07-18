@@ -209,6 +209,62 @@ class LocalDb {
     });
   }
 
+  Future<void> updateSale({
+    required Sale sale,
+    required List<SaleLine> lines,
+  }) async {
+    if (sale.id == null) throw ArgumentError('Sale ID is required');
+    final db = await database;
+    await db.transaction((txn) async {
+      final oldLines = await txn.query('sale_lines', where: 'sale_id=?', whereArgs: [sale.id]);
+
+      for (final old in oldLines) {
+        await txn.rawUpdate('''
+          UPDATE inventory
+          SET stock = stock + ?, sync_state='pending', updated_at=?
+          WHERE id=?
+        ''', [old['quantity'], DateTime.now().toIso8601String(), old['inventory_id']]);
+      }
+
+      for (final line in lines) {
+        final rows = await txn.query('inventory', columns: ['stock'], where: 'id=? AND deleted=0', whereArgs: [line.inventoryId], limit: 1);
+        if (rows.isEmpty) throw StateError('${line.tileName} is no longer available');
+        final stock = (rows.first['stock'] as num).toInt();
+        if (line.quantity <= 0 || line.quantity > stock) {
+          throw StateError('Insufficient stock for ${line.tileName}. Available: $stock');
+        }
+      }
+
+      await txn.update('sales', {
+        'customer_id': sale.customerId,
+        'customer_name': sale.customerName,
+        'subtotal': sale.subtotal,
+        'gst_percent': sale.gstPercent,
+        'gst_amount': sale.gstAmount,
+        'grand_total': sale.grandTotal,
+        'payment_mode': sale.paymentMode,
+        'sync_state': 'pending',
+      }, where: 'id=?', whereArgs: [sale.id]);
+
+      await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [sale.id]);
+      for (final line in lines) {
+        await txn.insert('sale_lines', {
+          'sale_id': sale.id,
+          'inventory_id': line.inventoryId,
+          'tile_name': line.tileName,
+          'quantity': line.quantity,
+          'unit_price': line.unitPrice,
+          'line_total': line.lineTotal,
+        });
+        await txn.rawUpdate('''
+          UPDATE inventory
+          SET stock = stock - ?, sync_state='pending', updated_at=?
+          WHERE id=?
+        ''', [line.quantity, DateTime.now().toIso8601String(), line.inventoryId]);
+      }
+    });
+  }
+
   Future<List<Sale>> sales() async {
     final db = await database;
     final rows = await db.query('sales', orderBy: 'created_at DESC');

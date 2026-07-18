@@ -2,8 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
+import 'package:printing/printing.dart';
 import '../models/inventory_item.dart';
 import '../services/local_db.dart';
+import '../services/stock_report_service.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -24,6 +26,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<void> load() async {
     items = await LocalDb.instance.inventory();
     if (mounted) setState(() => loading = false);
+  }
+
+
+  Future<void> exportImageWiseReport() async {
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No inventory available to export.')));
+      return;
+    }
+    try {
+      final file = await StockReportService.createImageWiseReport(items);
+      await Printing.sharePdf(bytes: await file.readAsBytes(), filename: 'Gokula_Image_Wise_Stock_Report.pdf');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create report: $e')));
+    }
   }
 
   Future<void> addItem() async {
@@ -74,7 +90,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Inventory')),
+      appBar: AppBar(title: const Text('Inventory'), actions: [IconButton(onPressed: exportImageWiseReport, tooltip: 'Export image-wise report', icon: const Icon(Icons.picture_as_pdf))]),
       floatingActionButton: FloatingActionButton.extended(onPressed: addItem, icon: const Icon(Icons.add), label: const Text('Add Tile')),
       body: loading ? const Center(child: CircularProgressIndicator()) : RefreshIndicator(onRefresh: load, child: ListView.builder(
         padding: const EdgeInsets.all(12), itemCount: items.length,
