@@ -7,6 +7,7 @@ class UpdatePreferences {
   static const _wifiDownloadKey = 'update_wifi_download';
   static const _downloadedVersionKey = 'update_downloaded_version';
   static const _downloadedPathKey = 'update_downloaded_path';
+  static const _lastAutomaticCheckKey = 'update_last_automatic_check';
 
   static Future<bool> autoCheckEnabled() async {
     final prefs = await SharedPreferences.getInstance();
@@ -45,6 +46,20 @@ class UpdatePreferences {
   static Future<String?> downloadedPath() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_downloadedPathKey);
+  }
+
+  static Future<bool> shouldRunAutomaticCheck() async {
+    final prefs = await SharedPreferences.getInstance();
+    final last = prefs.getString(_lastAutomaticCheckKey);
+    if (last == null) return true;
+    final parsed = DateTime.tryParse(last);
+    if (parsed == null) return true;
+    return DateTime.now().difference(parsed) >= const Duration(hours: 24);
+  }
+
+  static Future<void> markAutomaticCheckRun() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastAutomaticCheckKey, DateTime.now().toIso8601String());
   }
 
   static Future<void> clearDownloadedUpdate() async {

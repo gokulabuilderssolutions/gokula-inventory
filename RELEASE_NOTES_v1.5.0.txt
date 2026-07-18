@@ -1,0 +1,12 @@
+Gokula Inventory v1.5.0
+
+New dynamic master data features:
+- Searchable Size and Finish selectors in Inventory.
+- Default sizes: 2×2, 2×4, 4×2, 4×4, 6×4, 4×3.5, 12×18, 18×16, 16×16 and 1×1.
+- Default finishes: Glossy, Matt, Punch, Velvet, High Glossy, Sugar, Carving and Rocker.
+- Other / Add New option directly from the inventory form.
+- Master Data screen for adding, editing, searching and deleting values.
+- Categories for sizes and finishes.
+- Favourite values appear first.
+- Prevents deletion of a size or finish already used by inventory.
+- Existing inventory and sales database is preserved through database migration.

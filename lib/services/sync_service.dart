@@ -47,6 +47,15 @@ class SyncService {
       final pending = await LocalDb.instance.pendingInventory();
       var uploaded = 0;
       for (final item in pending) {
+        if (item.deleted) {
+          final existing = await client.from('inventory').select('id').eq('client_uid', item.clientUid).limit(1);
+          if (existing.isNotEmpty) {
+            await client.from('inventory').delete().eq('client_uid', item.clientUid);
+          }
+          if (item.id != null) await LocalDb.instance.markSynced(item.id!, item.cloudId, imageUrl: item.imageUrl);
+          uploaded++;
+          continue;
+        }
         String imageUrl = item.imageUrl;
         if (item.localImage.isNotEmpty && File(item.localImage).existsSync() && imageUrl.isEmpty) {
           final file = File(item.localImage);
@@ -93,14 +102,26 @@ class SyncService {
           final localId = sale['id'] as int;
           sale.remove('id');
           sale.remove('sync_state');
-          sale['lines'] = lines.map((line) {
+          final cloudLines = <Map<String, Object?>>[];
+          for (final line in lines) {
             final copy = Map<String, Object?>.from(line);
             copy.remove('id');
             copy.remove('sale_id');
-            return copy;
-          }).toList();
+            final inventoryId = (copy['inventory_id'] as num?)?.toInt();
+            if (inventoryId != null) {
+              final inventoryItem = await LocalDb.instance.inventoryById(inventoryId);
+              if (inventoryItem != null) copy['inventory_client_uid'] = inventoryItem.clientUid;
+            }
+            cloudLines.add(copy);
+          }
+          sale['lines'] = cloudLines;
           await client.from('sales').upsert(sale, onConflict: 'invoice_no');
           await LocalDb.instance.markSaleSynced(localId);
+        }
+
+        final cloudSales = await client.from('sales').select('*').order('created_at');
+        for (final row in cloudSales) {
+          await LocalDb.instance.upsertCloudSale(Map<String, dynamic>.from(row));
         }
       } catch (_) {
         // The sales schema may not have been installed yet. Sales stay safely pending.

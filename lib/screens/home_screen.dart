@@ -38,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _runAutomaticUpdateCheck() async {
     if (!await UpdatePreferences.autoCheckEnabled()) return;
+    if (!await UpdatePreferences.shouldRunAutomaticCheck()) return;
+    await UpdatePreferences.markAutomaticCheckRun();
     await _checkForAppUpdate(showNoUpdate: false, automatic: true);
   }
 

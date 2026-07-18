@@ -137,6 +137,7 @@ class _SaleFormScreenState extends State<SaleFormScreen> {
   String paymentMode = 'Cash';
   bool loading = true;
   bool saving = false;
+  late DateTime saleDate;
 
   double get subtotal => cart.fold(0, (sum, row) => sum + row.total);
   double get gstAmount => subtotal * gstPercent / 100;
@@ -145,6 +146,7 @@ class _SaleFormScreenState extends State<SaleFormScreen> {
   @override
   void initState() {
     super.initState();
+    saleDate = DateTime.tryParse(widget.existingSale?.createdAt ?? '') ?? DateTime.now();
     load();
   }
 
@@ -298,7 +300,7 @@ class _SaleFormScreenState extends State<SaleFormScreen> {
         gstAmount: gstAmount,
         grandTotal: grandTotal,
         paymentMode: paymentMode,
-        createdAt: existing?.createdAt ?? DateTime.now().toIso8601String(),
+        createdAt: DateTime(saleDate.year, saleDate.month, saleDate.day, saleDate.hour, saleDate.minute).toIso8601String(),
       );
       final lines = cart.map((row) => SaleLine(inventoryId: row.item.id!, tileName: row.item.tileName, quantity: row.quantity, unitPrice: row.unitPrice, lineTotal: row.total)).toList();
       int id;
@@ -331,6 +333,24 @@ class _SaleFormScreenState extends State<SaleFormScreen> {
             Expanded(child: DropdownButtonFormField<Customer?>(initialValue: customer, decoration: const InputDecoration(labelText: 'Customer'), items: [const DropdownMenuItem<Customer?>(value: null, child: Text('Walk-in Customer')), ...customers.map((e) => DropdownMenuItem<Customer?>(value: e, child: Text(e.name)))], onChanged: (value) => setState(() => customer = value))),
             IconButton(onPressed: addCustomer, tooltip: 'Add customer', icon: const Icon(Icons.person_add)),
           ]),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.calendar_month),
+            title: const Text('Sale date'),
+            subtitle: Text(DateFormat('dd-MM-yyyy').format(saleDate)),
+            trailing: const Icon(Icons.edit_calendar),
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: saleDate,
+                firstDate: DateTime(2020),
+                lastDate: DateTime.now().add(const Duration(days: 365)),
+              );
+              if (picked != null) {
+                setState(() => saleDate = DateTime(picked.year, picked.month, picked.day, saleDate.hour, saleDate.minute));
+              }
+            },
+          ),
           DropdownButtonFormField<String>(initialValue: paymentMode, decoration: const InputDecoration(labelText: 'Payment mode'), items: const ['Cash', 'UPI', 'Card', 'Credit', 'Bank Transfer'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(), onChanged: (value) => setState(() => paymentMode = value ?? 'Cash')),
           DropdownButtonFormField<double>(initialValue: gstPercent, decoration: const InputDecoration(labelText: 'GST'), items: const [0.0, 5.0, 12.0, 18.0, 28.0].map((e) => DropdownMenuItem(value: e, child: Text('${e.toStringAsFixed(0)}%'))).toList(), onChanged: (value) => setState(() => gstPercent = value ?? 18)),
         ]))),

@@ -2,6 +2,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/customer.dart';
 import '../models/inventory_item.dart';
+import '../models/master_option.dart';
 import '../models/sale.dart';
 
 class LocalDb {
@@ -14,13 +15,15 @@ class LocalDb {
     final path = join(await getDatabasesPath(), 'gokula_inventory.db');
     _db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await _createInventory(db);
         await _createSales(db);
+        await _createMasters(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) await _createSales(db);
+        if (oldVersion < 3) await _createMasters(db);
       },
     );
     return _db!;
@@ -87,6 +90,65 @@ class LocalDb {
     ''');
   }
 
+
+  Future<void> _createMasters(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS master_options(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        value TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'General',
+        favorite INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(type, value)
+      )
+    ''');
+    final count = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM master_options')) ?? 0;
+    if (count == 0) {
+      const sizes = [
+        ['2×2', 'Floor Tiles'], ['2×4', 'Wall Tiles'], ['4×2', 'Wall Tiles'],
+        ['4×4', 'Floor Tiles'], ['6×4', 'Floor Tiles'], ['4×3.5', 'Parking Tiles'],
+        ['12×18', 'Wall Tiles'], ['18×16', 'Wall Tiles'], ['16×16', 'Floor Tiles'],
+        ['1×1', 'Mosaic Tiles'],
+      ];
+      const finishes = ['Glossy', 'Matt', 'Punch', 'Velvet', 'High Glossy', 'Sugar', 'Carving', 'Rocker'];
+      for (var i = 0; i < sizes.length; i++) {
+        await db.insert('master_options', {'type': 'size', 'value': sizes[i][0], 'category': sizes[i][1], 'favorite': i < 3 ? 1 : 0, 'sort_order': i});
+      }
+      for (var i = 0; i < finishes.length; i++) {
+        await db.insert('master_options', {'type': 'texture', 'value': finishes[i], 'category': 'Finish', 'favorite': i < 3 ? 1 : 0, 'sort_order': i});
+      }
+    }
+  }
+
+  Future<List<MasterOption>> masterOptions(String type) async {
+    final db = await database;
+    final rows = await db.query('master_options', where: 'type=?', whereArgs: [type], orderBy: 'favorite DESC, category COLLATE NOCASE, sort_order, value COLLATE NOCASE');
+    return rows.map(MasterOption.fromMap).toList();
+  }
+
+  Future<int> saveMasterOption(MasterOption option) async {
+    final db = await database;
+    final map = option.toMap()..remove('id');
+    if (option.id == null) return db.insert('master_options', map, conflictAlgorithm: ConflictAlgorithm.abort);
+    await db.update('master_options', map, where: 'id=?', whereArgs: [option.id]);
+    return option.id!;
+  }
+
+  Future<int> masterUsageCount(MasterOption option) async {
+    final db = await database;
+    final column = option.type == 'size' ? 'size' : 'texture';
+    return Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM inventory WHERE deleted=0 AND $column=?', [option.value])) ?? 0;
+  }
+
+  Future<void> deleteMasterOption(MasterOption option) async {
+    if (option.id == null) return;
+    final used = await masterUsageCount(option);
+    if (used > 0) throw StateError('This value is used by $used inventory item(s).');
+    final db = await database;
+    await db.delete('master_options', where: 'id=?', whereArgs: [option.id]);
+  }
+
   Future<List<InventoryItem>> inventory() async {
     final db = await database;
     final rows = await db.query('inventory', where: 'deleted=0', orderBy: 'tile_name');
@@ -146,6 +208,88 @@ class LocalDb {
     } else if ((existing.first['sync_state'] ?? '') != 'pending') {
       await db.update('inventory', values, where: 'client_uid=?', whereArgs: [uid]);
     }
+  }
+
+
+  Future<void> deleteInventory(InventoryItem item) async {
+    if (item.id == null) return;
+    final db = await database;
+    await db.update('inventory', {
+      'deleted': 1,
+      'sync_state': 'pending',
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'id=?', whereArgs: [item.id]);
+  }
+
+  Future<InventoryItem?> inventoryById(int id) async {
+    final db = await database;
+    final rows = await db.query('inventory', where: 'id=?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : InventoryItem.fromMap(rows.first);
+  }
+
+  Future<void> upsertCloudSale(Map<String, dynamic> cloud) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final invoiceNo = (cloud['invoice_no'] ?? '').toString();
+      if (invoiceNo.isEmpty) return;
+      final existing = await txn.query('sales', where: 'invoice_no=?', whereArgs: [invoiceNo], limit: 1);
+      if (existing.isNotEmpty && (existing.first['sync_state'] ?? '') == 'pending') return;
+
+      final customerName = (cloud['customer_name'] ?? 'Walk-in Customer').toString();
+      int? customerId;
+      if (customerName.isNotEmpty && customerName != 'Walk-in Customer') {
+        final customerRows = await txn.query('customers', where: 'name=?', whereArgs: [customerName], limit: 1);
+        customerId = customerRows.isEmpty
+            ? await txn.insert('customers', {'name': customerName, 'phone': '', 'address': '', 'gstin': ''})
+            : customerRows.first['id'] as int?;
+      }
+      final values = {
+        'invoice_no': invoiceNo,
+        'customer_id': customerId,
+        'customer_name': customerName,
+        'subtotal': (cloud['subtotal'] as num?)?.toDouble() ?? 0,
+        'gst_percent': (cloud['gst_percent'] as num?)?.toDouble() ?? 0,
+        'gst_amount': (cloud['gst_amount'] as num?)?.toDouble() ?? 0,
+        'grand_total': (cloud['grand_total'] as num?)?.toDouble() ?? 0,
+        'payment_mode': (cloud['payment_mode'] ?? 'Cash').toString(),
+        'created_at': (cloud['created_at'] ?? DateTime.now().toIso8601String()).toString(),
+        'sync_state': 'synced',
+      };
+      int saleId;
+      if (existing.isEmpty) {
+        saleId = await txn.insert('sales', values);
+      } else {
+        saleId = existing.first['id'] as int;
+        await txn.update('sales', values, where: 'id=?', whereArgs: [saleId]);
+        await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
+      }
+      final rawLines = cloud['lines'];
+      if (rawLines is List) {
+        for (final raw in rawLines) {
+          if (raw is! Map) continue;
+          final line = Map<String, dynamic>.from(raw);
+          int? inventoryId;
+          final uid = (line['inventory_client_uid'] ?? '').toString();
+          if (uid.isNotEmpty) {
+            final inv = await txn.query('inventory', where: 'client_uid=?', whereArgs: [uid], limit: 1);
+            if (inv.isNotEmpty) inventoryId = inv.first['id'] as int?;
+          }
+          if (inventoryId == null) {
+            final inv = await txn.query('inventory', where: 'tile_name=? AND deleted=0', whereArgs: [(line['tile_name'] ?? '').toString()], limit: 1);
+            if (inv.isNotEmpty) inventoryId = inv.first['id'] as int?;
+          }
+          if (inventoryId == null) continue;
+          await txn.insert('sale_lines', {
+            'sale_id': saleId,
+            'inventory_id': inventoryId,
+            'tile_name': (line['tile_name'] ?? '').toString(),
+            'quantity': (line['quantity'] as num?)?.toInt() ?? 0,
+            'unit_price': (line['unit_price'] as num?)?.toDouble() ?? 0,
+            'line_total': (line['line_total'] as num?)?.toDouble() ?? 0,
+          });
+        }
+      }
+    });
   }
 
   Future<List<Customer>> customers() async {
@@ -244,6 +388,7 @@ class LocalDb {
         'gst_amount': sale.gstAmount,
         'grand_total': sale.grandTotal,
         'payment_mode': sale.paymentMode,
+        'created_at': sale.createdAt,
         'sync_state': 'pending',
       }, where: 'id=?', whereArgs: [sale.id]);
 
