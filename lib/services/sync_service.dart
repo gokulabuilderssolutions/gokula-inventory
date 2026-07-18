@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config.dart';
 import 'local_db.dart';
+import 'image_storage_service.dart';
 
 class SyncService {
   SyncService._();
@@ -67,8 +68,19 @@ class SyncService {
         uploaded++;
       }
       final cloudRows = await client.from('inventory').select('*');
+      final localItems = await LocalDb.instance.inventory();
+      final localByUid = {for (final item in localItems) item.clientUid: item};
       for (final row in cloudRows) {
-        await LocalDb.instance.upsertCloud(Map<String, dynamic>.from(row));
+        final cloud = Map<String, dynamic>.from(row);
+        final uid = (cloud['client_uid'] ?? 'cloud-${cloud['id']}').toString();
+        final imageUrl = (cloud['image_url'] ?? '').toString();
+        final existingLocal = localByUid[uid]?.localImage ?? '';
+        final cachedPath = await ImageStorageService.cacheRemoteImage(
+          imageUrl: imageUrl,
+          clientUid: uid,
+          existingLocalPath: existingLocal,
+        );
+        await LocalDb.instance.upsertCloud(cloud, cachedLocalImage: cachedPath);
       }
 
       // Sales sync is optional until the supplied supabase_sales_schema.sql is run.

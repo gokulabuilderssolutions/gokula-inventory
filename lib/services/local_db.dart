@@ -121,10 +121,11 @@ class LocalDb {
     await db.update('inventory', {'cloud_id': cloudId, 'image_url': imageUrl ?? '', 'sync_state': 'synced'}, where: 'id=?', whereArgs: [id]);
   }
 
-  Future<void> upsertCloud(Map<String, dynamic> cloud) async {
+  Future<void> upsertCloud(Map<String, dynamic> cloud, {String? cachedLocalImage}) async {
     final db = await database;
     final uid = (cloud['client_uid'] ?? 'cloud-${cloud['id']}').toString();
     final existing = await db.query('inventory', where: 'client_uid=?', whereArgs: [uid], limit: 1);
+    final preservedLocalImage = cachedLocalImage ?? (existing.isEmpty ? '' : (existing.first['local_image'] ?? '').toString());
     final values = {
       'client_uid': uid,
       'cloud_id': cloud['id'],
@@ -135,7 +136,7 @@ class LocalDb {
       'price': cloud['price'] ?? 0,
       'hsn_code': cloud['hsn_code'] ?? '6907',
       'image_url': cloud['image_url'] ?? '',
-      'local_image': '',
+      'local_image': preservedLocalImage,
       'sync_state': 'synced',
       'deleted': 0,
       'updated_at': DateTime.now().toIso8601String(),
