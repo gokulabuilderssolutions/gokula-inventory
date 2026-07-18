@@ -70,6 +70,30 @@ class SyncService {
       for (final row in cloudRows) {
         await LocalDb.instance.upsertCloud(Map<String, dynamic>.from(row));
       }
+
+      // Sales sync is optional until the supplied supabase_sales_schema.sql is run.
+      // Inventory sync continues even if the sales table has not yet been created.
+      try {
+        final pendingSales = await LocalDb.instance.pendingSalesWithLines();
+        for (final bundle in pendingSales) {
+          final sale = Map<String, Object?>.from(bundle['sale'] as Map);
+          final lines = (bundle['lines'] as List).map((e) => Map<String, Object?>.from(e as Map)).toList();
+          final localId = sale['id'] as int;
+          sale.remove('id');
+          sale.remove('sync_state');
+          sale['lines'] = lines.map((line) {
+            final copy = Map<String, Object?>.from(line);
+            copy.remove('id');
+            copy.remove('sale_id');
+            return copy;
+          }).toList();
+          await client.from('sales').upsert(sale, onConflict: 'invoice_no');
+          await LocalDb.instance.markSaleSynced(localId);
+        }
+      } catch (_) {
+        // The sales schema may not have been installed yet. Sales stay safely pending.
+      }
+
       final now = DateTime.now().toLocal().toString().split('.').first;
       await LocalDb.instance.setLastSync(now);
       return 'Sync complete: $uploaded uploaded, ${cloudRows.length} checked';

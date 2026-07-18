@@ -47,3 +47,9 @@ flutter build ios --release
 
 ## Important
 This package is source code. An APK cannot be compiled without the Android SDK and Flutter toolchain.
+
+## Sales module
+
+The app now includes offline sales, customer entry, GST calculation, automatic stock deduction, sales history and PDF invoice sharing.
+
+To sync sales to Supabase, run `supabase_sales_schema.sql` in the Supabase SQL Editor. Until then, sales remain safely stored offline and show as pending.

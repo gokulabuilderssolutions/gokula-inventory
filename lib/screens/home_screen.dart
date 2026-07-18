@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/local_db.dart';
 import '../services/sync_service.dart';
 import 'inventory_screen.dart';
+import 'sales_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -65,7 +66,10 @@ class _HomeScreenState extends State<HomeScreen> {
           await Navigator.push(context, MaterialPageRoute(builder: (_) => const InventoryScreen()));
           refreshStatus();
         })),
-        Card(child: const ListTile(leading: Icon(Icons.receipt_long), title: Text('Sales'), subtitle: Text('Sales module can be added in the next build'))),
+        Card(child: ListTile(leading: const Icon(Icons.receipt_long), title: const Text('Sales'), subtitle: const Text('Create invoices and automatically reduce stock'), trailing: const Icon(Icons.chevron_right), onTap: () async {
+          await Navigator.push(context, MaterialPageRoute(builder: (_) => const SalesScreen()));
+          refreshStatus();
+        })),
       ]),
     );
   }
