@@ -4,6 +4,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val keyAliasValue = System.getenv("ANDROID_KEY_ALIAS")
+val keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD")
+val hasReleaseSigning = !keystorePath.isNullOrBlank() &&
+    !keystorePassword.isNullOrBlank() &&
+    !keyAliasValue.isNullOrBlank() &&
+    !keyPasswordValue.isNullOrBlank()
+
 android {
     namespace = "com.gokula.gokula_inventory"
     compileSdk = flutter.compileSdkVersion
@@ -25,11 +34,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(keystorePath!!)
+                storePassword = keystorePassword
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

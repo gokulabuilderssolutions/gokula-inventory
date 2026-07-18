@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/local_db.dart';
 import '../services/sync_service.dart';
+import '../services/app_update_service.dart';
 import 'inventory_screen.dart';
 import 'sales_screen.dart';
 
@@ -21,10 +22,103 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     refreshStatus();
     SyncService.instance.startAutoSync();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkForAppUpdate());
     SyncService.instance.onlineStream.listen((value) {
       if (mounted) setState(() => online = value);
       refreshStatus();
     });
+  }
+
+
+  Future<void> _checkForAppUpdate({bool showNoUpdate = false}) async {
+    try {
+      final update = await AppUpdateService.checkForUpdate();
+      if (!mounted) return;
+      if (update == null) {
+        if (showNoUpdate) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('You already have the latest version.')),
+          );
+        }
+        return;
+      }
+
+      final shouldUpdate = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('New update available'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Version ${update.version} is available.'),
+                if (update.releaseNotes.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text('What is new:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(update.releaseNotes.trim()),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Update now'),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldUpdate != true || !mounted) return;
+      final progress = ValueNotifier<double>(0);
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: const Text('Downloading update'),
+            content: ValueListenableBuilder<double>(
+              valueListenable: progress,
+              builder: (_, value, __) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(value: value == 0 ? null : value),
+                  const SizedBox(height: 12),
+                  Text(value == 0 ? 'Starting download…' : '${(value * 100).round()}%'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      try {
+        final apk = await AppUpdateService.downloadApk(
+          update,
+          onProgress: (value) => progress.value = value,
+        );
+        if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        await AppUpdateService.installApk(apk);
+      } finally {
+        progress.dispose();
+      }
+    } catch (error) {
+      if (!mounted) return;
+      if (Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Update check failed: $error')),
+      );
+    }
   }
 
   Future<void> refreshStatus() async {
@@ -48,6 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Gokula Inventory'), actions: [
+        IconButton(tooltip: 'Check for updates', onPressed: () => _checkForAppUpdate(showNoUpdate: true), icon: const Icon(Icons.system_update)),
         IconButton(onPressed: syncing ? null : sync, icon: syncing ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.sync)),
       ]),
       body: ListView(padding: const EdgeInsets.all(16), children: [
