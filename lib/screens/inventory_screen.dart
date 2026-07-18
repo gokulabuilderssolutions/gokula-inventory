@@ -93,6 +93,133 @@ class _InventoryScreenState extends State<InventoryScreen> {
     await load();
   }
 
+
+  Future<void> editItem(InventoryItem item) async {
+    final name = TextEditingController(text: item.tileName);
+    final size = TextEditingController(text: item.size);
+    final texture = TextEditingController(text: item.texture);
+    final stock = TextEditingController(text: item.stock.toString());
+    final price = TextEditingController(text: item.price.toStringAsFixed(2));
+    String imagePath = item.localImage;
+    bool imageChanged = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) {
+          return AlertDialog(
+            title: const Text('Edit Tile'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: name, decoration: const InputDecoration(labelText: 'Tile name')),
+                  TextField(controller: size, decoration: const InputDecoration(labelText: 'Size')),
+                  TextField(controller: texture, decoration: const InputDecoration(labelText: 'Texture')),
+                  TextField(
+                    controller: stock,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Stock'),
+                  ),
+                  TextField(
+                    controller: price,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Price'),
+                  ),
+                  const SizedBox(height: 12),
+                  if (imagePath.isNotEmpty && File(imagePath).existsSync())
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(File(imagePath), width: 120, height: 120, fit: BoxFit.cover),
+                    )
+                  else if (item.imageUrl.isNotEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(item.imageUrl, width: 120, height: 120, fit: BoxFit.cover),
+                    ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await ImagePicker().pickImage(
+                            source: ImageSource.camera,
+                            imageQuality: 80,
+                          );
+                          if (picked != null) {
+                            setLocal(() {
+                              imagePath = picked.path;
+                              imageChanged = true;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('Camera'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await ImagePicker().pickImage(
+                            source: ImageSource.gallery,
+                            imageQuality: 80,
+                          );
+                          if (picked != null) {
+                            setLocal(() {
+                              imagePath = picked.path;
+                              imageChanged = true;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Gallery'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: () async {
+                  if (name.text.trim().isEmpty || item.id == null) return;
+                  var persistentImagePath = item.localImage;
+                  if (imageChanged) {
+                    persistentImagePath = await ImageStorageService.persistPickedImage(
+                      sourcePath: imagePath,
+                      clientUid: item.clientUid,
+                    );
+                  }
+                  await LocalDb.instance.updateInventory(
+                    InventoryItem(
+                      id: item.id,
+                      clientUid: item.clientUid,
+                      cloudId: item.cloudId,
+                      tileName: name.text.trim(),
+                      size: size.text.trim(),
+                      texture: texture.text.trim(),
+                      stock: int.tryParse(stock.text.trim()) ?? 0,
+                      price: double.tryParse(price.text.trim()) ?? 0,
+                      hsnCode: item.hsnCode,
+                      imageUrl: imageChanged ? '' : item.imageUrl,
+                      localImage: persistentImagePath,
+                      syncState: 'pending',
+                      deleted: item.deleted,
+                      updatedAt: DateTime.now().toIso8601String(),
+                    ),
+                  );
+                  if (context.mounted) Navigator.pop(context);
+                },
+                child: const Text('Save Changes'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    await load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -106,7 +233,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
             leading: _InventoryImage(item: item),
             title: Text(item.tileName, style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('${item.size} • ${item.texture}\nStock: ${item.stock}  Price: ₹${item.price.toStringAsFixed(2)}'),
-            trailing: Chip(label: Text(item.syncState)),
+            trailing: PopupMenuButton<String>(
+              tooltip: 'Inventory options',
+              onSelected: (value) {
+                if (value == 'edit') editItem(item);
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.edit),
+                    title: Text('Edit'),
+                  ),
+                ),
+              ],
+            ),
+            onTap: () => editItem(item),
             isThreeLine: true,
           ));
         },
