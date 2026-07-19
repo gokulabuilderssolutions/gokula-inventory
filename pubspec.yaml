@@ -1,7 +1,7 @@
 name: gokula_inventory
 description: Offline-first tile inventory app with Supabase sync.
 publish_to: 'none'
-version: 1.5.0+150
+version: 1.6.2+18
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -24,6 +24,10 @@ dependencies:
   http: ^1.2.2
   package_info_plus: ^8.1.0
   open_filex: ^4.6.0
+  excel: ^4.0.6
+  file_picker: ^8.1.7
+  share_plus: ^10.1.4
+  cross_file: ^0.3.4+2
 
 dev_dependencies:
   flutter_test:
