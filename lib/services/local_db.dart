@@ -155,6 +155,54 @@ class LocalDb {
     return rows.map(InventoryItem.fromMap).toList();
   }
 
+  Future<InventoryItem?> findInventoryForBulk({
+    required String clientUid,
+    required String tileName,
+    required String size,
+    required String texture,
+  }) async {
+    final db = await database;
+    if (clientUid.trim().isNotEmpty) {
+      final rows = await db.query(
+        'inventory',
+        where: 'client_uid=?',
+        whereArgs: [clientUid.trim()],
+        limit: 1,
+      );
+      if (rows.isNotEmpty) return InventoryItem.fromMap(rows.first);
+    }
+    final rows = await db.query(
+      'inventory',
+      where: 'deleted=0 AND LOWER(tile_name)=LOWER(?) AND LOWER(size)=LOWER(?) AND LOWER(texture)=LOWER(?)',
+      whereArgs: [tileName.trim(), size.trim(), texture.trim()],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : InventoryItem.fromMap(rows.first);
+  }
+
+  Future<void> setBulkImageName(String clientUid, String fileName) async {
+    final db = await database;
+    final key = 'bulk_image:$clientUid';
+    if (fileName.trim().isEmpty) {
+      await db.delete('app_meta', where: 'key=?', whereArgs: [key]);
+      return;
+    }
+    await db.insert(
+      'app_meta',
+      {'key': key, 'value': fileName.trim()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Map<String, String>> bulkImageNames() async {
+    final db = await database;
+    final rows = await db.query('app_meta', where: "key LIKE 'bulk_image:%'");
+    return {
+      for (final row in rows)
+        (row['key'] as String).substring('bulk_image:'.length): (row['value'] ?? '').toString(),
+    };
+  }
+
   Future<void> saveInventory(InventoryItem item) async {
     final db = await database;
     await db.insert('inventory', item.toLocalMap()..remove('id'), conflictAlgorithm: ConflictAlgorithm.replace);

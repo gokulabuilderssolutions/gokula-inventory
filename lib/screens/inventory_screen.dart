@@ -9,6 +9,7 @@ import '../services/image_storage_service.dart';
 import '../services/local_db.dart';
 import '../services/stock_report_service.dart';
 import 'master_data_screen.dart';
+import 'bulk_inventory_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -156,6 +157,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Inventory'), actions: [
+      IconButton(tooltip: 'Bulk inventory upload', icon: const Icon(Icons.upload_file), onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => const BulkInventoryScreen())); await load(); }),
       IconButton(tooltip: 'Manage sizes and finishes', icon: const Icon(Icons.tune), onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => const MasterDataScreen())); await load(); }),
       IconButton(onPressed: exportImageWiseReport, tooltip: 'Export image-wise report', icon: const Icon(Icons.picture_as_pdf)),
     ]),

@@ -1,18 +1,52 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
-val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-val keyAliasValue = System.getenv("ANDROID_KEY_ALIAS")
-val keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD")
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use {
+        keystoreProperties.load(it)
+    }
+}
+
+val storeFileValue =
+    keystoreProperties.getProperty("storeFile")
+        ?: System.getenv("ANDROID_KEYSTORE_PATH")
+
+val storePasswordValue =
+    keystoreProperties.getProperty("storePassword")
+        ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+
+val keyAliasValue =
+    keystoreProperties.getProperty("keyAlias")
+        ?: System.getenv("ANDROID_KEY_ALIAS")
+
+val keyPasswordValue =
+    keystoreProperties.getProperty("keyPassword")
+        ?: System.getenv("ANDROID_KEY_PASSWORD")
 
 val hasReleaseSigning =
-    !keystorePath.isNullOrBlank() &&
-    !keystorePassword.isNullOrBlank() &&
+    !storeFileValue.isNullOrBlank() &&
+    !storePasswordValue.isNullOrBlank() &&
     !keyAliasValue.isNullOrBlank() &&
     !keyPasswordValue.isNullOrBlank()
+
+val isReleaseBuild = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+
+if (isReleaseBuild && !hasReleaseSigning) {
+    throw GradleException(
+        "Release signing information is missing. Update android/key.properties " +
+            "or configure the Android signing environment variables."
+    )
+}
 
 android {
     namespace = "com.gokula.gokula_inventory"
@@ -35,8 +69,9 @@ android {
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
-                storeFile = file(keystorePath!!)
-                storePassword = keystorePassword
+                // This path is resolved relative to android/app.
+                storeFile = file(storeFileValue!!)
+                storePassword = storePasswordValue
                 keyAlias = keyAliasValue
                 keyPassword = keyPasswordValue
             }
@@ -44,14 +79,16 @@ android {
     }
 
     buildTypes {
-        release {
-            if (!hasReleaseSigning) {
-                throw GradleException(
-                    "Release signing variables are missing. Check GitHub Actions secrets."
-                )
-            }
+        getByName("debug") {
+            // Android's standard debug keystore is used automatically.
+        }
 
-            signingConfig = signingConfigs.getByName("release")
+        getByName("release") {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

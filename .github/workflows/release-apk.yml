@@ -31,11 +31,8 @@ jobs:
             echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is missing"
             exit 1
           fi
-
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
-
           test -s android/app/upload-keystore.jks
-          echo "Keystore restored successfully"
 
       - name: Verify signing secrets
         shell: bash
@@ -44,25 +41,18 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_PASSWORD" ]; then
-            echo "ERROR: KEYSTORE_PASSWORD secret is missing"
-            exit 1
-          fi
-
-          if [ -z "$KEY_ALIAS" ]; then
-            echo "ERROR: KEY_ALIAS secret is missing"
-            exit 1
-          fi
-
-          if [ -z "$KEY_PASSWORD" ]; then
-            echo "ERROR: KEY_PASSWORD secret is missing"
-            exit 1
-          fi
-
-          echo "All signing secrets are available"
+          for variable in KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!variable}" ]; then
+              echo "ERROR: GitHub secret $variable is missing"
+              exit 1
+            fi
+          done
 
       - name: Get Flutter packages
         run: flutter pub get
+
+      - name: Analyze Flutter source
+        run: flutter analyze
 
       - name: Build signed APK
         env:
@@ -73,9 +63,7 @@ jobs:
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Rename APK
-        run: |
-          cp build/app/outputs/flutter-apk/app-release.apk \
-            "gokula-inventory-${GITHUB_REF_NAME}.apk"
+        run: cp build/app/outputs/flutter-apk/app-release.apk "gokula-inventory-${GITHUB_REF_NAME}.apk"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

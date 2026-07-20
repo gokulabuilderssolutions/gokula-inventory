@@ -81,7 +81,7 @@ class _MasterDataScreenState extends State<MasterDataScreen> with SingleTickerPr
         leading: Icon(item.favorite ? Icons.star : Icons.star_border),
         title: Text(item.value, style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text(item.category),
-          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.edit), onPressed: () => edit(item)),
           IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => remove(item)),
         ]),
