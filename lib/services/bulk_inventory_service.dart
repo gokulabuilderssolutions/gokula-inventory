@@ -60,7 +60,7 @@ class BulkInventoryService {
     if (book.tables.containsKey('Sheet1')) book.delete('Sheet1');
 
     sheet.appendRow(headers.map(TextCellValue.new).toList());
-    sheet.appendRow([
+    sheet.appendRow(const [
       TextCellValue(''),
       TextCellValue('Sample Wall Tile'),
       TextCellValue('12×18'),
@@ -70,7 +70,7 @@ class BulkInventoryService {
       TextCellValue('6907'),
       TextCellValue('sample_wall_tile.jpg'),
     ]);
-    sheet.appendRow([
+    sheet.appendRow(const [
       TextCellValue(''),
       TextCellValue('Sample Floor Tile'),
       TextCellValue('2×2'),
@@ -139,7 +139,7 @@ class BulkInventoryService {
 
     for (final required in ['tile_name', 'size', 'finish_texture']) {
       if (!column.containsKey(required)) {
-        throw FormatException('Required column "${required}" is missing. Please use the downloaded template.');
+        throw FormatException('Required column "$required" is missing. Please use the downloaded template.');
       }
     }
 
