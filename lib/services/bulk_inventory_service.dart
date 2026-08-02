@@ -169,12 +169,12 @@ class BulkInventoryService {
       final price = double.tryParse(priceText.replaceAll(',', ''));
       if (stockText.isNotEmpty && stock == null) {
         skipped++;
-        errors.add('Row ${rowIndex + 1}: invalid stock "${stockText}".');
+        errors.add('Row ${rowIndex + 1}: invalid stock "$stockText".');
         continue;
       }
       if (priceText.isNotEmpty && price == null) {
         skipped++;
-        errors.add('Row ${rowIndex + 1}: invalid price "${priceText}".');
+        errors.add('Row ${rowIndex + 1}: invalid price "$priceText".');
         continue;
       }
 
