@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cross_file/cross_file.dart';
+// import 'package:cross_file/cross_file.dart'; // removed as share_plus provides XFile
 import 'package:excel/excel.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -61,24 +61,24 @@ class BulkInventoryService {
 
     sheet.appendRow(headers.map(TextCellValue.new).toList());
     sheet.appendRow([
-      const TextCellValue(''),
-      const TextCellValue('Sample Wall Tile'),
-      const TextCellValue('12×18'),
-      const TextCellValue('Glossy'),
-      const IntCellValue(25),
-      const DoubleCellValue(120.00),
-      const TextCellValue('6907'),
-      const TextCellValue('sample_wall_tile.jpg'),
+      TextCellValue(''),
+      TextCellValue('Sample Wall Tile'),
+      TextCellValue('12×18'),
+      TextCellValue('Glossy'),
+      IntCellValue(25),
+      DoubleCellValue(120.00),
+      TextCellValue('6907'),
+      TextCellValue('sample_wall_tile.jpg'),
     ]);
     sheet.appendRow([
-      const TextCellValue(''),
-      const TextCellValue('Sample Floor Tile'),
-      const TextCellValue('2×2'),
-      const TextCellValue('Matt'),
-      const IntCellValue(40),
-      const DoubleCellValue(95.00),
-      const TextCellValue('6907'),
-      const TextCellValue('sample_floor_tile.png'),
+      TextCellValue(''),
+      TextCellValue('Sample Floor Tile'),
+      TextCellValue('2×2'),
+      TextCellValue('Matt'),
+      IntCellValue(40),
+      DoubleCellValue(95.00),
+      TextCellValue('6907'),
+      TextCellValue('sample_floor_tile.png'),
     ]);
 
     sheet.setColumnWidth(0, 38);
@@ -91,14 +91,14 @@ class BulkInventoryService {
     sheet.setColumnWidth(7, 30);
 
     final notes = book['Instructions'];
-    notes.appendRow([const TextCellValue('Gokula Inventory Bulk Upload Instructions')]);
-    notes.appendRow([const TextCellValue('1. Do not change the column headings in the Inventory sheet.')]);
-    notes.appendRow([const TextCellValue('2. tile_name, size and finish_texture are required.')]);
-    notes.appendRow([const TextCellValue('3. stock must be a whole number and price may contain decimals.')]);
-    notes.appendRow([const TextCellValue('4. Keep client_uid blank for new products. The app creates it automatically.')]);
-    notes.appendRow([const TextCellValue('5. For image matching, enter the exact image filename, for example tile101.jpg.')]);
-    notes.appendRow([const TextCellValue('6. After importing the Excel file, use Bulk Images and select all product photos together.')]);
-    notes.appendRow([const TextCellValue('7. Existing rows are updated when client_uid matches. Otherwise a matching tile name + size + finish is updated.')]);
+    notes.appendRow([TextCellValue('Gokula Inventory Bulk Upload Instructions')]);
+    notes.appendRow([TextCellValue('1. Do not change the column headings in the Inventory sheet.')]);
+    notes.appendRow([TextCellValue('2. tile_name, size and finish_texture are required.')]);
+    notes.appendRow([TextCellValue('3. stock must be a whole number and price may contain decimals.')]);
+    notes.appendRow([TextCellValue('4. Keep client_uid blank for new products. The app creates it automatically.')]);
+    notes.appendRow([TextCellValue('5. For image matching, enter the exact image filename, for example tile101.jpg.')]);
+    notes.appendRow([TextCellValue('6. After importing the Excel file, use Bulk Images and select all product photos together.')]);
+    notes.appendRow([TextCellValue('7. Existing rows are updated when client_uid matches. Otherwise a matching tile name + size + finish is updated.')]);
 
     final bytes = book.encode();
     if (bytes == null) throw StateError('Could not create Excel template.');
@@ -139,7 +139,7 @@ class BulkInventoryService {
 
     for (final required in ['tile_name', 'size', 'finish_texture']) {
       if (!column.containsKey(required)) {
-        throw FormatException('Required column "$required" is missing. Please use the downloaded template.');
+        throw FormatException('Required column "${required}" is missing. Please use the downloaded template.');
       }
     }
 
@@ -169,12 +169,12 @@ class BulkInventoryService {
       final price = double.tryParse(priceText.replaceAll(',', ''));
       if (stockText.isNotEmpty && stock == null) {
         skipped++;
-        errors.add('Row ${rowIndex + 1}: invalid stock "$stockText".');
+        errors.add('Row ${rowIndex + 1}: invalid stock "${stockText}".');
         continue;
       }
       if (priceText.isNotEmpty && price == null) {
         skipped++;
-        errors.add('Row ${rowIndex + 1}: invalid price "$priceText".');
+        errors.add('Row ${rowIndex + 1}: invalid price "${priceText}".');
         continue;
       }
 
