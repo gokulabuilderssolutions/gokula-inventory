@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-// import 'package:cross_file/cross_file.dart'; // removed as share_plus provides XFile
+import 'package:cross_file/cross_file.dart'; // added back: XFile is provided by cross_file
 import 'package:excel/excel.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -59,8 +59,11 @@ class BulkInventoryService {
     final sheet = book['Inventory'];
     if (book.tables.containsKey('Sheet1')) book.delete('Sheet1');
 
+    // headers row
     sheet.appendRow(headers.map(TextCellValue.new).toList());
-    sheet.appendRow([
+
+    // sample rows - use const constructors where supported to satisfy analyzer
+    sheet.appendRow(const [
       TextCellValue(''),
       TextCellValue('Sample Wall Tile'),
       TextCellValue('12×18'),
@@ -70,7 +73,7 @@ class BulkInventoryService {
       TextCellValue('6907'),
       TextCellValue('sample_wall_tile.jpg'),
     ]);
-    sheet.appendRow([
+    sheet.appendRow(const [
       TextCellValue(''),
       TextCellValue('Sample Floor Tile'),
       TextCellValue('2×2'),
@@ -91,14 +94,14 @@ class BulkInventoryService {
     sheet.setColumnWidth(7, 30);
 
     final notes = book['Instructions'];
-    notes.appendRow([TextCellValue('Gokula Inventory Bulk Upload Instructions')]);
-    notes.appendRow([TextCellValue('1. Do not change the column headings in the Inventory sheet.')]);
-    notes.appendRow([TextCellValue('2. tile_name, size and finish_texture are required.')]);
-    notes.appendRow([TextCellValue('3. stock must be a whole number and price may contain decimals.')]);
-    notes.appendRow([TextCellValue('4. Keep client_uid blank for new products. The app creates it automatically.')]);
-    notes.appendRow([TextCellValue('5. For image matching, enter the exact image filename, for example tile101.jpg.')]);
-    notes.appendRow([TextCellValue('6. After importing the Excel file, use Bulk Images and select all product photos together.')]);
-    notes.appendRow([TextCellValue('7. Existing rows are updated when client_uid matches. Otherwise a matching tile name + size + finish is updated.')]);
+    notes.appendRow(const [TextCellValue('Gokula Inventory Bulk Upload Instructions')]);
+    notes.appendRow(const [TextCellValue('1. Do not change the column headings in the Inventory sheet.')]);
+    notes.appendRow(const [TextCellValue('2. tile_name, size and finish_texture are required.')]);
+    notes.appendRow(const [TextCellValue('3. stock must be a whole number and price may contain decimals.')]);
+    notes.appendRow(const [TextCellValue('4. Keep client_uid blank for new products. The app creates it automatically.')]);
+    notes.appendRow(const [TextCellValue('5. For image matching, enter the exact image filename, for example tile101.jpg.')]);
+    notes.appendRow(const [TextCellValue('6. After importing the Excel file, use Bulk Images and select all product photos together.')]);
+    notes.appendRow(const [TextCellValue('7. Existing rows are updated when client_uid matches. Otherwise a matching tile name + size + finish is updated.')]);
 
     final bytes = book.encode();
     if (bytes == null) throw StateError('Could not create Excel template.');
@@ -139,7 +142,7 @@ class BulkInventoryService {
 
     for (final required in ['tile_name', 'size', 'finish_texture']) {
       if (!column.containsKey(required)) {
-        throw FormatException('Required column "${required}" is missing. Please use the downloaded template.');
+        throw FormatException('Required column "$required" is missing. Please use the downloaded template.');
       }
     }
 
