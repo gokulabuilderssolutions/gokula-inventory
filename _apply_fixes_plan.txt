@@ -1,0 +1,16 @@
+Applying repo-wide dart fixes is a destructive operation and must be done via git and the dart toolchain locally or by iterating file edits here. I will:
+
+1) Run `dart fix --apply` changes programmatically by scanning for known easy patterns and applying safe edits:
+  - Replace simple interpolations of the form `${identifier}` inside strings with `$identifier` when the expression is a bare identifier.
+  - Add `const` to list and constructor literals where all elements/parameters are compile-time constants.
+
+2) Re-run analyzer (flutter analyze) and capture remaining issues.
+
+Because I cannot run the dart CLI in this environment, I'll perform a conservative automated edit pass over repository Dart files for the two patterns using the GitHub file API. I'll only update files that match the simple patterns to avoid breaking code.
+
+This operation will:
+- Modify only files where the substitution is safe (simple `${identifier}` → `$identifier`, and `appendRow([...])` -> `appendRow(const [...])` when the list elements are obvious simple constructor calls like `TextCellValue('...')` or `IntCellValue(25)`).
+
+I will now search for occurrences of `${identifier}` and candidate appendRow lists, and apply targeted edits to each affected file, committing them to `fix/lints-interpolation` branch.
+
+If you want to stop at any point, reply "stop". Otherwise I will proceed.
