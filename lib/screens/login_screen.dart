@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/auth_service.dart';
-import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,18 +11,12 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final AuthService _authService = AuthService();
+  final _authService = AuthService();
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  final TextEditingController _emailController =
-      TextEditingController();
-
-  final TextEditingController _passwordController =
-      TextEditingController();
-
-  final GlobalKey<FormState> _formKey =
-      GlobalKey<FormState>();
-
-  bool _isLoading = false;
+  bool _loading = false;
   bool _hidePassword = true;
 
   @override
@@ -33,51 +27,27 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _loading = true);
 
     try {
       await _authService.login(
-  email: _emailController.text,
-  password: _passwordController.text,
-);
-
-      if (!mounted) {
-        return;
-      }
-
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-         builder: (_) => const HomeScreen(),
-        ),
+        email: _emailController.text,
+        password: _passwordController.text,
       );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            error.toString().replaceFirst(
-                  'Exception: ',
-                  '',
-                ),
-          ),
-        ),
-      );
+      _showMessage(error.toString().replaceFirst('Exception: ', ''));
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -88,9 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: 420,
-              ),
+              constraints: const BoxConstraints(maxWidth: 420),
               child: Card(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
@@ -99,11 +67,15 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(
-                          Icons.inventory_2,
-                          size: 72,
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(18),
+                          child: Image.asset(
+                            'assets/images/logo.jpg',
+                            height: 120,
+                            fit: BoxFit.cover,
+                          ),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 18),
                         const Text(
                           'Gokula Inventory',
                           style: TextStyle(
@@ -111,36 +83,22 @@ class _LoginScreenState extends State<LoginScreen> {
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Sign in with your registered email',
-                        ),
-                        const SizedBox(height: 28),
+                        const SizedBox(height: 6),
+                        const Text('Sign in with your registered account'),
+                        const SizedBox(height: 24),
                         TextFormField(
                           controller: _emailController,
-                          keyboardType:
-                              TextInputType.emailAddress,
-                          textInputAction:
-                              TextInputAction.next,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.next,
                           decoration: const InputDecoration(
                             labelText: 'Email',
-                            prefixIcon: Icon(
-                              Icons.email_outlined,
-                            ),
+                            prefixIcon: Icon(Icons.email_outlined),
                             border: OutlineInputBorder(),
                           ),
                           validator: (value) {
-                            final email =
-                                value?.trim() ?? '';
-
-                            if (email.isEmpty) {
-                              return 'Enter your email';
-                            }
-
-                            if (!email.contains('@')) {
-                              return 'Enter a valid email';
-                            }
-
+                            final email = value?.trim() ?? '';
+                            if (email.isEmpty) return 'Enter your email';
+                            if (!email.contains('@')) return 'Enter a valid email';
                             return null;
                           },
                         ),
@@ -148,26 +106,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextFormField(
                           controller: _passwordController,
                           obscureText: _hidePassword,
-                          textInputAction:
-                              TextInputAction.done,
+                          textInputAction: TextInputAction.done,
                           onFieldSubmitted: (_) {
-                            if (!_isLoading) {
-                              _login();
-                            }
+                            if (!_loading) _login();
                           },
                           decoration: InputDecoration(
                             labelText: 'Password',
-                            prefixIcon: const Icon(
-                              Icons.lock_outline,
-                            ),
-                            border:
-                                const OutlineInputBorder(),
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            border: const OutlineInputBorder(),
                             suffixIcon: IconButton(
                               onPressed: () {
-                                setState(() {
-                                  _hidePassword =
-                                      !_hidePassword;
-                                });
+                                setState(() => _hidePassword = !_hidePassword);
                               },
                               icon: Icon(
                                 _hidePassword
@@ -177,29 +126,24 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                           validator: (value) {
-                            if (value == null ||
-                                value.isEmpty) {
+                            if (value == null || value.isEmpty) {
                               return 'Enter your password';
                             }
-
                             return null;
                           },
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 22),
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton(
-                            onPressed:
-                                _isLoading ? null : _login,
+                            onPressed: _loading ? null : _login,
                             child: Padding(
-                              padding:
-                                  const EdgeInsets.all(14),
-                              child: _isLoading
+                              padding: const EdgeInsets.all(14),
+                              child: _loading
                                   ? const SizedBox(
                                       width: 22,
                                       height: 22,
-                                      child:
-                                          CircularProgressIndicator(
+                                      child: CircularProgressIndicator(
                                         strokeWidth: 2,
                                       ),
                                     )

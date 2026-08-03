@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../services/app_update_service.dart';
+import '../services/auth_service.dart';
 import '../services/local_db.dart';
 import '../services/sync_service.dart';
 import '../services/update_preferences.dart';
 import 'inventory_screen.dart';
+import 'login_screen.dart';
 import 'sales_screen.dart';
 import 'update_settings_screen.dart';
 
@@ -227,6 +229,18 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Gokula Inventory'),
         actions: [
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: () async {
+              await AuthService().logout();
+              if (!context.mounted) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            },
+            icon: const Icon(Icons.logout),
+          ),
           IconButton(
             tooltip: 'Update settings',
             onPressed: () => Navigator.push(

@@ -13,16 +13,20 @@ class AuthService {
     );
 
     final user = response.user;
-
     if (user == null) {
-      throw Exception('Login failed. User not found.');
+      throw Exception('Login failed. Check your email and password.');
     }
 
     final profile = await _supabase
         .from('profiles')
         .select('id, email, full_name, role, is_active')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
+
+    if (profile == null) {
+      await _supabase.auth.signOut();
+      throw Exception('User profile is not configured. Contact the administrator.');
+    }
 
     if (profile['is_active'] != true) {
       await _supabase.auth.signOut();
@@ -32,9 +36,7 @@ class AuthService {
     return Map<String, dynamic>.from(profile);
   }
 
-  Future<void> logout() async {
-    await _supabase.auth.signOut();
-  }
+  Future<void> logout() => _supabase.auth.signOut();
 
   User? get currentUser => _supabase.auth.currentUser;
 
