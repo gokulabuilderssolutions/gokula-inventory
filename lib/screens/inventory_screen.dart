@@ -47,14 +47,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return SafeArea(child: SizedBox(
           height: MediaQuery.of(context).size.height * .72,
           child: Column(children: [
-            ListTile(title: Text('Select ${type == 'size' ? 'Size' : 'Finish'}', style: const TextStyle(fontWeight: FontWeight.bold)), trailing: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context))),
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: TextField(controller: search, onChanged: (_) => setLocal(() {}), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search', border: OutlineInputBorder()))),
+            ListTile(title: Text('Select ${type == 'size' ? 'Size' : 'Finish'}', style: const TextStyle(fontWeight: FontWeight.bold)), trailing: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(sheetContext)),
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: TextField(controller: search, onChanged: (_) => setLocal(() {}), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search'),),
             const SizedBox(height: 8),
             Expanded(child: ListView.builder(itemCount: visible.length + 1, itemBuilder: (_, index) {
               if (index == visible.length) {
                 return ListTile(leading: const Icon(Icons.add_circle_outline), title: const Text('Other / Add new'), onTap: () async {
                   final added = await _quickAddMaster(type);
-                  if (added != null && context.mounted) Navigator.pop(context, added);
+                  if (!mounted) return;
+                  if (added != null) Navigator.pop(sheetContext, added);
                 });
               }
               final option = visible[index];
@@ -63,7 +64,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 title: Text(option.value),
                 subtitle: Text(option.category),
                 trailing: current == option.value ? const Icon(Icons.check) : null,
-                onTap: () => Navigator.pop(context, option.value),
+                onTap: () => Navigator.pop(sheetContext, option.value),
               );
             })),
           ]),
@@ -90,9 +91,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
           if (text.isEmpty) return;
           try {
             await LocalDb.instance.saveMasterOption(MasterOption(type: type, value: text, category: category.text.trim().isEmpty ? 'General' : category.text.trim(), favorite: favorite, sortOrder: 999));
-            if (context.mounted) Navigator.pop(context, text);
+            if (!mounted) return;
+            Navigator.pop(context, text);
           } catch (_) {
-            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This value already exists.')));
+            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This value already exists.')));
           }
         }, child: const Text('Add')),
       ],
@@ -113,8 +115,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
         TextField(controller: name, decoration: const InputDecoration(labelText: 'Tile name')),
         const SizedBox(height: 10),
-        ListTile(contentPadding: EdgeInsets.zero, title: const Text('Size'), subtitle: Text(size.isEmpty ? 'Tap to select' : size), trailing: const Icon(Icons.arrow_drop_down), onTap: () async { final v = await chooseMaster(type: 'size', current: size); if (v != null) setLocal(() => size = v); }),
-        ListTile(contentPadding: EdgeInsets.zero, title: const Text('Finish / Texture'), subtitle: Text(texture.isEmpty ? 'Tap to select' : texture), trailing: const Icon(Icons.arrow_drop_down), onTap: () async { final v = await chooseMaster(type: 'texture', current: texture); if (v != null) setLocal(() => texture = v); }),
+        ListTile(contentPadding: EdgeInsets.zero, title: const Text('Size'), subtitle: Text(size.isEmpty ? 'Tap to select' : size), trailing: const Icon(Icons.arrow_drop_down), onTap: () async { final s = await chooseMaster(type: 'size', current: size); if (s != null) setLocal(() => size = s); }),
+        ListTile(contentPadding: EdgeInsets.zero, title: const Text('Finish / Texture'), subtitle: Text(texture.isEmpty ? 'Tap to select' : texture), trailing: const Icon(Icons.arrow_drop_down), onTap: () async { final t = await chooseMaster(type: 'texture', current: texture); if (t != null) setLocal(() => texture = t); }),
         TextField(controller: stock, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Stock')),
         TextField(controller: price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price')),
         const SizedBox(height: 12),
@@ -122,7 +124,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         else if ((item?.imageUrl ?? '').isNotEmpty) Image.network(item!.imageUrl, width: 120, height: 120, fit: BoxFit.cover),
         Wrap(spacing: 8, children: [
           OutlinedButton.icon(onPressed: () async { final p = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 80); if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; }); }, icon: const Icon(Icons.camera_alt), label: const Text('Camera')),
-          OutlinedButton.icon(onPressed: () async { final p = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 80); if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; }); }, icon: const Icon(Icons.photo_library), label: const Text('Gallery')),
+          OutlinedButton.icon(onPressed: () async { final p = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 80); if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; }); }, icon: const Icon(Icons.photo), label: const Text('Gallery')),
         ]),
       ])),
       actions: [
@@ -141,7 +143,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
             imageUrl: imageChanged ? '' : (item?.imageUrl ?? ''), localImage: persistent, syncState: 'pending', deleted: item?.deleted ?? false,
             updatedAt: DateTime.now().toIso8601String(),
           );
-          if (item == null) await LocalDb.instance.saveInventory(value); else await LocalDb.instance.updateInventory(value);
+          if (item == null) {
+            await LocalDb.instance.saveInventory(value);
+          } else {
+            await LocalDb.instance.updateInventory(value);
+          }
           if (context.mounted) Navigator.pop(context);
         }, child: Text(item == null ? 'Save Offline' : 'Save Changes')),
       ],
@@ -150,15 +156,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> deleteItem(InventoryItem item) async {
-    final ok = await showDialog<bool>(context: context, builder: (context) => AlertDialog(title: const Text('Delete inventory item?'), content: Text('Delete ${item.tileName}? Existing sales history will remain safe.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete'))]));
-    if (ok == true) { await LocalDb.instance.deleteInventory(item); await load(); }
+    final ok = await showDialog<bool>(context: context, builder: (context) => AlertDialog(title: const Text('Delete inventory item?'), content: Text('Delete ' + item.tileName + '? Existing sales history will be retained.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')), TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Yes'))]));
+    if (ok == true) {
+      await LocalDb.instance.deleteInventory(item);
+      await load();
+    }
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Inventory'), actions: [
-      IconButton(tooltip: 'Bulk inventory upload', icon: const Icon(Icons.upload_file), onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => const BulkInventoryScreen())); await load(); }),
-      IconButton(tooltip: 'Manage sizes and finishes', icon: const Icon(Icons.tune), onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => const MasterDataScreen())); await load(); }),
+      IconButton(tooltip: 'Bulk inventory upload', icon: const Icon(Icons.upload_file), onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => const BulkInventoryScreen())); }),
+      IconButton(tooltip: 'Manage sizes and finishes', icon: const Icon(Icons.tune), onPressed: () async { await Navigator.push(context, MaterialPageRoute(builder: (_) => const MasterDataScreen())); }),
       IconButton(onPressed: exportImageWiseReport, tooltip: 'Export image-wise report', icon: const Icon(Icons.picture_as_pdf)),
     ]),
     floatingActionButton: FloatingActionButton.extended(onPressed: () => itemDialog(), icon: const Icon(Icons.add), label: const Text('Add Tile')),
@@ -181,7 +190,7 @@ class _InventoryImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final file = item.localImage.isEmpty ? null : File(item.localImage);
     if (file != null && file.existsSync()) return ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(file, width: 58, height: 58, fit: BoxFit.cover));
-    if (item.imageUrl.isNotEmpty) return ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(item.imageUrl, width: 58, height: 58, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const CircleAvatar(child: Icon(Icons.inventory_2))));
+    if (item.imageUrl.isNotEmpty) return ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(item.imageUrl, width: 58, height: 58, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const CircleAvatar(child: Icon(Icons.broken_image))));
     return const CircleAvatar(child: Icon(Icons.inventory_2));
   }
 }
