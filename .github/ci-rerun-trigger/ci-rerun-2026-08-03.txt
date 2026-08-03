@@ -1,0 +1,3 @@
+Trigger CI re-run
+
+This file was created by GitHub Copilot to trigger the CI workflow re-run after applying analyzer fixes to lib/services/bulk_inventory_service.dart.
