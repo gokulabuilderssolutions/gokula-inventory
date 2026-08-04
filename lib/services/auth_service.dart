@@ -3,6 +3,39 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class AuthService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
+  Future<Map<String, dynamic>> signUp({
+    required String fullName,
+    required String email,
+    required String password,
+  }) async {
+    final response = await _supabase.auth.signUp(
+      email: email.trim(),
+      password: password,
+    );
+
+    final user = response.user;
+    if (user == null) {
+      throw Exception('Sign up failed. Please try again.');
+    }
+
+    // Insert into profiles table (if not already present via trigger).
+    await _supabase.from('profiles').upsert({
+      'id': user.id,
+      'email': email.trim(),
+      'full_name': fullName.trim(),
+      'role': 'user',
+      'is_active': true,
+    });
+
+    return {
+      'id': user.id,
+      'email': email.trim(),
+      'full_name': fullName.trim(),
+      'role': 'user',
+      'is_active': true,
+    };
+  }
+
   Future<Map<String, dynamic>> login({
     required String email,
     required String password,
