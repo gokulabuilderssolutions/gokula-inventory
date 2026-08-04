@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/auth_service.dart';
 
@@ -13,29 +12,52 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _authService = AuthService();
   final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
   bool _loading = false;
   bool _hidePassword = true;
+  bool _isSignUp = false;
 
   @override
   void dispose() {
+    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
+  void _toggleMode() {
+    setState(() => _isSignUp = !_isSignUp);
+    _formKey.currentState?.reset();
+  }
+
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _loading = true);
 
     try {
-      await _authService.login(
-        email: _emailController.text,
-        password: _passwordController.text,
-      );
+      if (_isSignUp) {
+        await _authService.signUp(
+          fullName: _nameController.text,
+          email: _emailController.text,
+          password: _passwordController.text,
+        );
+        if (mounted) {
+          _showMessage(
+            'Account created! You can now sign in.',
+          );
+        }
+        setState(() => _isSignUp = false);
+        _passwordController.clear();
+      } else {
+        await _authService.login(
+          email: _emailController.text,
+          password: _passwordController.text,
+        );
+      }
     } catch (error) {
       _showMessage(error.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -84,8 +106,30 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         const SizedBox(height: 6),
-                        const Text('Sign in with your registered account'),
+                        Text(
+                          _isSignUp
+                              ? 'Create your account to get started'
+                              : 'Sign in with your registered account',
+                        ),
                         const SizedBox(height: 24),
+                        if (_isSignUp) ...[
+                          TextFormField(
+                            controller: _nameController,
+                            textInputAction: TextInputAction.next,
+                            decoration: const InputDecoration(
+                              labelText: 'Full Name',
+                              prefixIcon: Icon(Icons.person_outline),
+                              border: OutlineInputBorder(),
+                            ),
+                            validator: (value) {
+                              final name = value?.trim() ?? '';
+                              if (name.isEmpty) return 'Enter your full name';
+                              if (name.length < 3) return 'Name is too short';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                         TextFormField(
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
@@ -108,7 +152,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           obscureText: _hidePassword,
                           textInputAction: TextInputAction.done,
                           onFieldSubmitted: (_) {
-                            if (!_loading) _login();
+                            if (!_loading) _submit();
                           },
                           decoration: InputDecoration(
                             labelText: 'Password',
@@ -129,6 +173,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             if (value == null || value.isEmpty) {
                               return 'Enter your password';
                             }
+                            if (_isSignUp && value.length < 6) {
+                              return 'Password must be at least 6 characters';
+                            }
                             return null;
                           },
                         ),
@@ -136,7 +183,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton(
-                            onPressed: _loading ? null : _login,
+                            onPressed: _loading ? null : _submit,
                             child: Padding(
                               padding: const EdgeInsets.all(14),
                               child: _loading
@@ -147,8 +194,17 @@ class _LoginScreenState extends State<LoginScreen> {
                                         strokeWidth: 2,
                                       ),
                                     )
-                                  : const Text('Login'),
+                                  : Text(_isSignUp ? 'Create Account' : 'Login'),
                             ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: _loading ? null : _toggleMode,
+                          child: Text(
+                            _isSignUp
+                                ? 'Already have an account? Sign in'
+                                : "Don't have an account? Create one",
                           ),
                         ),
                       ],

@@ -61,14 +61,14 @@ class BulkInventoryService {
     // headers row
     sheet.appendRow(headers.map(TextCellValue.new).toList());
 
-    // sample rows - use const constructors where supported to satisfy analyzer
+    // sample rows - IntCellValue and DoubleCellValue support const, TextCellValue does not.
     sheet.appendRow([
       TextCellValue(''),
       TextCellValue('Sample Wall Tile'),
       TextCellValue('12×18'),
       TextCellValue('Glossy'),
-      IntCellValue(25),
-      DoubleCellValue(120.00),
+      const IntCellValue(25),
+      const DoubleCellValue(120.00),
       TextCellValue('6907'),
       TextCellValue('sample_wall_tile.jpg'),
     ]);
@@ -77,8 +77,8 @@ class BulkInventoryService {
       TextCellValue('Sample Floor Tile'),
       TextCellValue('2×2'),
       TextCellValue('Matt'),
-      IntCellValue(40),
-      DoubleCellValue(95.00),
+      const IntCellValue(40),
+      const DoubleCellValue(95.00),
       TextCellValue('6907'),
       TextCellValue('sample_floor_tile.png'),
     ]);

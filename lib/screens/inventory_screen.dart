@@ -20,13 +20,78 @@ class InventoryScreen extends StatefulWidget {
 class _InventoryScreenState extends State<InventoryScreen> {
   List<InventoryItem> items = [];
   bool loading = true;
+  final search = TextEditingController();
+  String _sort = 'name_asc';
 
   @override
-  void initState() { super.initState(); load(); }
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  @override
+  void dispose() {
+    search.dispose();
+    super.dispose();
+  }
 
   Future<void> load() async {
     items = await LocalDb.instance.inventory();
     if (mounted) setState(() => loading = false);
+  }
+
+  List<InventoryItem> get _visibleItems {
+    final q = search.text.trim().toLowerCase();
+    final filtered = items.where((item) {
+      if (q.isEmpty) return true;
+      return item.tileName.toLowerCase().contains(q);
+    }).toList();
+
+    switch (_sort) {
+      case 'name_z_a':
+        filtered.sort((a, b) => b.tileName.toLowerCase().compareTo(a.tileName.toLowerCase()));
+        break;
+      case 'size':
+        filtered.sort((a, b) => a.size.toLowerCase().compareTo(b.size.toLowerCase()));
+        break;
+      case 'texture':
+        filtered.sort((a, b) => a.texture.toLowerCase().compareTo(b.texture.toLowerCase()));
+        break;
+      case 'stock_asc':
+        filtered.sort((a, b) => a.stock.compareTo(b.stock));
+        break;
+      case 'price_asc':
+        filtered.sort((a, b) => a.price.compareTo(b.price));
+        break;
+      case 'price_desc':
+        filtered.sort((a, b) => b.price.compareTo(a.price));
+        break;
+      case 'name_asc':
+      default:
+        filtered.sort((a, b) => a.tileName.toLowerCase().compareTo(b.tileName.toLowerCase()));
+        break;
+    }
+    return filtered;
+  }
+
+  String get _sortLabel {
+    switch (_sort) {
+      case 'name_z_a':
+        return 'Z–A';
+      case 'size':
+        return 'Size';
+      case 'texture':
+        return 'Finish';
+      case 'stock_asc':
+        return 'Stock';
+      case 'price_asc':
+        return 'Price ↑';
+      case 'price_desc':
+        return 'Price ↓';
+      case 'name_asc':
+      default:
+        return 'A–Z';
+    }
   }
 
   Future<void> exportImageWiseReport() async {
@@ -51,11 +116,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
             Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: TextField(controller: search, onChanged: (_) => setLocal(() {}), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search', border: OutlineInputBorder()))),
             const SizedBox(height: 8),
             Expanded(child: ListView.builder(itemCount: visible.length + 1, itemBuilder: (_, index) {
-              if (index == visible.length) {
-                return ListTile(leading: const Icon(Icons.add_circle_outline), title: const Text('Other / Add new'), onTap: () async {
-                  final added = await _quickAddMaster(type);
-                  if (added != null && context.mounted) Navigator.pop(context, added);
-                });
+if (index == visible.length) {
+                return ListTile(
+                  leading: const Icon(Icons.add_circle_outline),
+                  title: const Text('Other / Add new'),
+                  onTap: () async {
+                    final added = await _quickAddMaster(type);
+                    if (!mounted) return;
+                    if (added != null) Navigator.pop(sheetContext, added);
+                  },
+                );
               }
               final option = visible[index];
               return ListTile(
@@ -89,8 +159,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final text = value.text.trim();
           if (text.isEmpty) return;
           try {
-            await LocalDb.instance.saveMasterOption(MasterOption(type: type, value: text, category: category.text.trim().isEmpty ? 'General' : category.text.trim(), favorite: favorite, sortOrder: 999));
-            if (context.mounted) Navigator.pop(context, text);
+await LocalDb.instance.saveMasterOption(MasterOption(type: type, value: text, category: category.text.trim().isEmpty ? 'General' : category.text.trim(), favorite: favorite, sortOrder: 999));
+            if (!mounted) return;
+            Navigator.pop(context, text);
           } catch (_) {
             if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This value already exists.')));
           }
@@ -141,7 +212,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
             imageUrl: imageChanged ? '' : (item?.imageUrl ?? ''), localImage: persistent, syncState: 'pending', deleted: item?.deleted ?? false,
             updatedAt: DateTime.now().toIso8601String(),
           );
-          if (item == null) await LocalDb.instance.saveInventory(value); else await LocalDb.instance.updateInventory(value);
+if (item == null) {
+            await LocalDb.instance.saveInventory(value);
+          } else {
+            await LocalDb.instance.updateInventory(value);
+          }
           if (context.mounted) Navigator.pop(context);
         }, child: Text(item == null ? 'Save Offline' : 'Save Changes')),
       ],
@@ -162,15 +237,93 @@ class _InventoryScreenState extends State<InventoryScreen> {
       IconButton(onPressed: exportImageWiseReport, tooltip: 'Export image-wise report', icon: const Icon(Icons.picture_as_pdf)),
     ]),
     floatingActionButton: FloatingActionButton.extended(onPressed: () => itemDialog(), icon: const Icon(Icons.add), label: const Text('Add Tile')),
-    body: loading ? const Center(child: CircularProgressIndicator()) : RefreshIndicator(onRefresh: load, child: ListView.builder(padding: const EdgeInsets.all(12), itemCount: items.length, itemBuilder: (_, index) {
-      final item = items[index];
-      return Card(child: ListTile(
-        leading: _InventoryImage(item: item), title: Text(item.tileName, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text('${item.size} • ${item.texture}\nStock: ${item.stock}  Price: ₹${item.price.toStringAsFixed(2)}'), isThreeLine: true,
-        onTap: () => itemDialog(item),
-        trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') itemDialog(item); if (v == 'delete') deleteItem(item); }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))]),
-      ));
-    })),
+    body: loading
+        ? const Center(child: CircularProgressIndicator())
+        : Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: search,
+                        onChanged: (_) => setState(() {}),
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.search),
+                          hintText: 'Search design name…',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    PopupMenuButton<String>(
+                      initialValue: _sort,
+                      onSelected: (v) => setState(() => _sort = v),
+                      tooltip: 'Sort',
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'name_asc', child: Text('Design A–Z')),
+                        PopupMenuItem(value: 'name_z_a', child: Text('Design Z–A')),
+                        PopupMenuItem(value: 'size', child: Text('Size')),
+                        PopupMenuItem(value: 'texture', child: Text('Finish')),
+                        PopupMenuItem(value: 'stock_asc', child: Text('Stock (low to high)')),
+                        PopupMenuItem(value: 'price_asc', child: Text('Price (low to high)')),
+                        PopupMenuItem(value: 'price_desc', child: Text('Price (high to low)')),
+                      ],
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.sort),
+                            const SizedBox(width: 4),
+                            Text(_sortLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_visibleItems.isEmpty)
+                const Expanded(
+                  child: Center(child: Text('No items found.')),
+                )
+              else
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: load,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _visibleItems.length,
+                      itemBuilder: (_, index) {
+                        final item = _visibleItems[index];
+                        return Card(
+                          child: ListTile(
+                            leading: _InventoryImage(item: item),
+                            title: Text(item.tileName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                            subtitle: Text('${item.size} • ${item.texture}\nStock: ${item.stock}  Price: ₹${item.price.toStringAsFixed(2)}'),
+                            isThreeLine: true,
+                            onTap: () => itemDialog(item),
+                            trailing: PopupMenuButton<String>(
+                              onSelected: (v) {
+                                if (v == 'edit') itemDialog(item);
+                                if (v == 'delete') deleteItem(item);
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+            ],
+          ),
   );
 }
 
