@@ -36,40 +36,83 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<String?> chooseMaster({required String type, String? current}) async {
-    var options = await LocalDb.instance.masterOptions(type);
+    final options = await LocalDb.instance.masterOptions(type);
     final search = TextEditingController();
+
     return showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => StatefulBuilder(builder: (context, setLocal) {
-        final q = search.text.trim().toLowerCase();
-        final visible = options.where((e) => q.isEmpty || e.value.toLowerCase().contains(q) || e.category.toLowerCase().contains(q)).toList();
-        return SafeArea(child: SizedBox(
-          height: MediaQuery.of(context).size.height * .72,
-          child: Column(children: [
-            ListTile(title: Text('Select ${type == 'size' ? 'Size' : 'Finish'}', style: const TextStyle(fontWeight: FontWeight.bold)), trailing: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(sheetContext)),
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: TextField(controller: search, onChanged: (_) => setLocal(() {}), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search'),),
-            const SizedBox(height: 8),
-            Expanded(child: ListView.builder(itemCount: visible.length + 1, itemBuilder: (_, index) {
-              if (index == visible.length) {
-                return ListTile(leading: const Icon(Icons.add_circle_outline), title: const Text('Other / Add new'), onTap: () async {
-                  final added = await _quickAddMaster(type);
-                  if (!mounted) return;
-                  if (added != null) Navigator.pop(sheetContext, added);
-                });
-              }
-              final option = visible[index];
-              return ListTile(
-                leading: Icon(option.favorite ? Icons.star : Icons.label_outline),
-                title: Text(option.value),
-                subtitle: Text(option.category),
-                trailing: current == option.value ? const Icon(Icons.check) : null,
-                onTap: () => Navigator.pop(sheetContext, option.value),
-              );
-            })),
-          ]),
-        ));
-      }),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (BuildContext sbContext, StateSetter setLocal) {
+            final q = search.text.trim().toLowerCase();
+            final visible = options.where((e) =>
+              q.isEmpty ||
+              e.value.toLowerCase().contains(q) ||
+              e.category.toLowerCase().contains(q)
+            ).toList();
+
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * .72,
+                child: Column(
+                  children: [
+                    ListTile(
+                      title: Text(
+                        'Select ${type == 'size' ? 'Size' : 'Finish'}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: TextField(
+                        controller: search,
+                        onChanged: (_) => setLocal(() {}),
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.search),
+                          hintText: 'Search',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: visible.length + 1,
+                        itemBuilder: (_, index) {
+                          if (index == visible.length) {
+                            return ListTile(
+                              leading: const Icon(Icons.add_circle_outline),
+                              title: const Text('Other / Add new'),
+                              onTap: () async {
+                                final added = await _quickAddMaster(type);
+                                if (!mounted) return;
+                                if (added != null) Navigator.of(sheetContext).pop(added);
+                              },
+                            );
+                          }
+
+                          final option = visible[index];
+                          return ListTile(
+                            leading: Icon(option.favorite ? Icons.star : Icons.label_outline),
+                            title: Text(option.value),
+                            subtitle: Text(option.category),
+                            trailing: current == option.value ? const Icon(Icons.check) : null,
+                            onTap: () => Navigator.of(sheetContext).pop(option.value),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -77,28 +120,67 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final value = TextEditingController();
     final category = TextEditingController(text: type == 'texture' ? 'Finish' : 'General');
     bool favorite = false;
-    return showDialog<String>(context: context, builder: (context) => StatefulBuilder(builder: (_, setLocal) => AlertDialog(
-      title: Text('Add ${type == 'size' ? 'Size' : 'Finish'}'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: value, autofocus: true, decoration: InputDecoration(labelText: type == 'size' ? 'Size (example: 12×18)' : 'Finish name')),
-        TextField(controller: category, decoration: const InputDecoration(labelText: 'Category')),
-        SwitchListTile(contentPadding: EdgeInsets.zero, value: favorite, onChanged: (v) => setLocal(() => favorite = v), title: const Text('Favourite')),
-      ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(onPressed: () async {
-          final text = value.text.trim();
-          if (text.isEmpty) return;
-          try {
-            await LocalDb.instance.saveMasterOption(MasterOption(type: type, value: text, category: category.text.trim().isEmpty ? 'General' : category.text.trim(), favorite: favorite, sortOrder: 999));
-            if (!mounted) return;
-            Navigator.pop(context, text);
-          } catch (_) {
-            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This value already exists.')));
-          }
-        }, child: const Text('Add')),
-      ],
-    )));
+
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (BuildContext sbCtx, StateSetter setLocal) {
+            return AlertDialog(
+              title: Text('Add ${type == 'size' ? 'Size' : 'Finish'}'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: value,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: type == 'size' ? 'Size (example: 12×18)' : 'Finish name',
+                    ),
+                  ),
+                  TextField(
+                    controller: category,
+                    decoration: const InputDecoration(labelText: 'Category'),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: favorite,
+                    onChanged: (v) => setLocal(() => favorite = v),
+                    title: const Text('Favourite'),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
+                FilledButton(
+                  onPressed: () async {
+                    final text = value.text.trim();
+                    if (text.isEmpty) return;
+
+                    try {
+                      await LocalDb.instance.saveMasterOption(MasterOption(
+                        type: type,
+                        value: text,
+                        category: category.text.trim().isEmpty ? 'General' : category.text.trim(),
+                        favorite: favorite,
+                        sortOrder: 0,
+                      ));
+                      if (!mounted) return;
+                      Navigator.of(dialogContext).pop(text);
+                    } catch (_) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(sbCtx).showSnackBar(const SnackBar(content: Text('This value already exists.')));
+                      }
+                    }
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> itemDialog([InventoryItem? item]) async {
@@ -110,53 +192,120 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String imagePath = item?.localImage ?? '';
     bool imageChanged = false;
 
-    await showDialog<void>(context: context, builder: (dialogContext) => StatefulBuilder(builder: (context, setLocal) => AlertDialog(
-      title: Text(item == null ? 'Add Tile' : 'Edit Tile'),
-      content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: name, decoration: const InputDecoration(labelText: 'Tile name')),
-        const SizedBox(height: 10),
-        ListTile(contentPadding: EdgeInsets.zero, title: const Text('Size'), subtitle: Text(size.isEmpty ? 'Tap to select' : size), trailing: const Icon(Icons.arrow_drop_down), onTap: () async { final s = await chooseMaster(type: 'size', current: size); if (s != null) setLocal(() => size = s); }),
-        ListTile(contentPadding: EdgeInsets.zero, title: const Text('Finish / Texture'), subtitle: Text(texture.isEmpty ? 'Tap to select' : texture), trailing: const Icon(Icons.arrow_drop_down), onTap: () async { final t = await chooseMaster(type: 'texture', current: texture); if (t != null) setLocal(() => texture = t); }),
-        TextField(controller: stock, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Stock')),
-        TextField(controller: price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price')),
-        const SizedBox(height: 12),
-        if (imagePath.isNotEmpty && File(imagePath).existsSync()) Image.file(File(imagePath), width: 120, height: 120, fit: BoxFit.cover)
-        else if ((item?.imageUrl ?? '').isNotEmpty) Image.network(item!.imageUrl, width: 120, height: 120, fit: BoxFit.cover),
-        Wrap(spacing: 8, children: [
-          OutlinedButton.icon(onPressed: () async { final p = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 80); if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; }); }, icon: const Icon(Icons.camera_alt), label: const Text('Camera')),
-          OutlinedButton.icon(onPressed: () async { final p = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 80); if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; }); }, icon: const Icon(Icons.photo), label: const Text('Gallery')),
-        ]),
-      ])),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(onPressed: () async {
-          if (name.text.trim().isEmpty || size.isEmpty || texture.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter tile name, size and finish.')));
-            return;
-          }
-          final uid = item?.clientUid ?? const Uuid().v4();
-          var persistent = item?.localImage ?? '';
-          if (imageChanged || (item == null && imagePath.isNotEmpty)) persistent = await ImageStorageService.persistPickedImage(sourcePath: imagePath, clientUid: uid);
-          final value = InventoryItem(
-            id: item?.id, clientUid: uid, cloudId: item?.cloudId, tileName: name.text.trim(), size: size, texture: texture,
-            stock: int.tryParse(stock.text.trim()) ?? 0, price: double.tryParse(price.text.trim()) ?? 0, hsnCode: item?.hsnCode ?? '6907',
-            imageUrl: imageChanged ? '' : (item?.imageUrl ?? ''), localImage: persistent, syncState: 'pending', deleted: item?.deleted ?? false,
-            updatedAt: DateTime.now().toIso8601String(),
-          );
-          if (item == null) {
-            await LocalDb.instance.saveInventory(value);
-          } else {
-            await LocalDb.instance.updateInventory(value);
-          }
-          if (context.mounted) Navigator.pop(context);
-        }, child: Text(item == null ? 'Save Offline' : 'Save Changes')),
-      ],
-    )));
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (BuildContext sbCtx, StateSetter setLocal) => AlertDialog(
+          title: Text(item == null ? 'Add Tile' : 'Edit Tile'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(controller: name, decoration: const InputDecoration(labelText: 'Tile name')),
+              const SizedBox(height: 10),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Size'),
+                subtitle: Text(size.isEmpty ? 'Tap to select' : size),
+                trailing: const Icon(Icons.arrow_drop_down),
+                onTap: () async {
+                  final selected = await chooseMaster(type: 'size', current: size);
+                  if (!mounted) return;
+                  if (selected != null) setLocal(() => size = selected);
+                },
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Finish / Texture'),
+                subtitle: Text(texture.isEmpty ? 'Tap to select' : texture),
+                trailing: const Icon(Icons.arrow_drop_down),
+                onTap: () async {
+                  final selected = await chooseMaster(type: 'texture', current: texture);
+                  if (!mounted) return;
+                  if (selected != null) setLocal(() => texture = selected);
+                },
+              ),
+              TextField(controller: stock, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Stock')),
+              TextField(controller: price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price')),
+              const SizedBox(height: 12),
+              if (imagePath.isNotEmpty && File(imagePath).existsSync())
+                Image.file(File(imagePath), width: 120, height: 120, fit: BoxFit.cover)
+              else if ((item?.imageUrl ?? '').isNotEmpty)
+                Image.network(item!.imageUrl, width: 120, height: 120, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox(width: 120, height: 120))
+              else
+                const SizedBox.shrink(),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, children: [
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final p = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 80);
+                    if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; });
+                  },
+                  icon: const Icon(Icons.camera_alt),
+                  label: const Text('Camera'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final p = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 80);
+                    if (p != null) setLocal(() { imagePath = p.path; imageChanged = true; });
+                  },
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('Gallery'),
+                ),
+              ]),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
+            FilledButton(onPressed: () async {
+              if (name.text.trim().isEmpty || size.isEmpty || texture.isEmpty) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter tile name, size and finish.')));
+                return;
+              }
+              final uid = item?.clientUid ?? const Uuid().v4();
+              var persistent = item?.localImage ?? '';
+              if (imageChanged || (item == null && imagePath.isNotEmpty)) persistent = await ImageStorageService.persistPickedImage(sourcePath: imagePath, clientUid: uid);
+              final value = InventoryItem(
+                id: item?.id,
+                clientUid: uid,
+                cloudId: item?.cloudId,
+                tileName: name.text.trim(),
+                size: size,
+                texture: texture,
+                stock: int.tryParse(stock.text.trim()) ?? 0,
+                price: double.tryParse(price.text.trim()) ?? 0,
+                hsnCode: item?.hsnCode ?? '6907',
+                imageUrl: imageChanged ? '' : (item?.imageUrl ?? ''),
+                localImage: persistent,
+                syncState: 'pending',
+                deleted: item?.deleted ?? false,
+                updatedAt: DateTime.now().toIso8601String(),
+              );
+              if (item == null) {
+                await LocalDb.instance.saveInventory(value);
+              } else {
+                await LocalDb.instance.updateInventory(value);
+              }
+              if (mounted) Navigator.of(dialogContext).pop();
+            }, child: Text(item == null ? 'Save Offline' : 'Save Changes')),
+          ],
+        ),
+      ),
+    );
+
     await load();
   }
 
   Future<void> deleteItem(InventoryItem item) async {
-    final ok = await showDialog<bool>(context: context, builder: (context) => AlertDialog(title: const Text('Delete inventory item?'), content: Text('Delete ' + item.tileName + '? Existing sales history will be retained.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')), TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Yes'))]));
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete inventory item?'),
+        content: Text('Delete ${item.tileName}? Existing sales will not be removed.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+        ],
+      ),
+    );
     if (ok == true) {
       await LocalDb.instance.deleteInventory(item);
       await load();
