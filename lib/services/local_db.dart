@@ -15,15 +15,17 @@ class LocalDb {
     final path = join(await getDatabasesPath(), 'gokula_inventory.db');
     _db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await _createInventory(db);
         await _createSales(db);
         await _createMasters(db);
+        await _createReturns(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) await _createSales(db);
         if (oldVersion < 3) await _createMasters(db);
+        if (oldVersion < 4) await _createReturns(db);
       },
     );
     return _db!;
@@ -88,6 +90,51 @@ class LocalDb {
         FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE
       )
     ''');
+  }
+
+
+
+  Future<void> _createReturns(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS returns(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_no TEXT NOT NULL UNIQUE,
+        sale_id INTEGER NOT NULL,
+        invoice_no TEXT NOT NULL,
+        customer_id INTEGER,
+        customer_name TEXT NOT NULL,
+        return_date TEXT NOT NULL,
+        reason TEXT DEFAULT '',
+        total_amount REAL NOT NULL DEFAULT 0,
+        sync_state TEXT NOT NULL DEFAULT 'pending',
+        FOREIGN KEY(sale_id) REFERENCES sales(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS return_lines(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER NOT NULL,
+        sale_id INTEGER NOT NULL,
+        sale_line_id INTEGER NOT NULL,
+        inventory_id INTEGER NOT NULL,
+        tile_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        unit_price REAL NOT NULL,
+        line_total REAL NOT NULL,
+        FOREIGN KEY(return_id) REFERENCES returns(id) ON DELETE CASCADE,
+        FOREIGN KEY(sale_id) REFERENCES sales(id),
+        FOREIGN KEY(sale_line_id) REFERENCES sale_lines(id),
+        FOREIGN KEY(inventory_id) REFERENCES inventory(id)
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_returns_sale_id ON returns(sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_return_lines_sale_line_id ON return_lines(sale_line_id)',
+    );
   }
 
 
@@ -223,7 +270,8 @@ class LocalDb {
     final db = await database;
     final inv = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM inventory WHERE sync_state='pending'")) ?? 0;
     final sales = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM sales WHERE sync_state='pending'")) ?? 0;
-    return inv + sales;
+    final returns = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM returns WHERE sync_state='pending'")) ?? 0;
+    return inv + sales + returns;
   }
 
   Future<void> markSynced(int id, int? cloudId, {String? imageUrl}) async {
@@ -491,6 +539,239 @@ class LocalDb {
   Future<void> markSaleSynced(int id) async {
     final db = await database;
     await db.update('sales', {'sync_state': 'synced'}, where: 'id=?', whereArgs: [id]);
+  }
+
+
+  Future<String> nextReturnNo() async {
+    final db = await database;
+    final count =
+        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM returns')) ??
+            0;
+    final now = DateTime.now();
+    final date =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    return 'RET/$date/${(count + 1).toString().padLeft(4, '0')}';
+  }
+
+  Future<List<Map<String, Object?>>> returnableLinesForSale(int saleId) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        sl.id AS sale_line_id,
+        sl.sale_id AS sale_id,
+        sl.inventory_id AS inventory_id,
+        sl.tile_name AS tile_name,
+        sl.quantity AS sold_quantity,
+        sl.unit_price AS original_unit_price,
+        sl.line_total AS sold_line_total,
+        COALESCE(SUM(rl.quantity), 0) AS returned_quantity
+      FROM sale_lines sl
+      LEFT JOIN return_lines rl
+        ON rl.sale_line_id = sl.id
+      WHERE sl.sale_id = ?
+      GROUP BY
+        sl.id,
+        sl.sale_id,
+        sl.inventory_id,
+        sl.tile_name,
+        sl.quantity,
+        sl.unit_price,
+        sl.line_total
+      ORDER BY sl.tile_name COLLATE NOCASE
+    ''', [saleId]);
+  }
+
+  Future<int> createReturn({
+    required int saleId,
+    required String invoiceNo,
+    required int? customerId,
+    required String customerName,
+    required int saleLineId,
+    required int inventoryId,
+    required String tileName,
+    required int quantity,
+    required double unitPrice,
+    required String reason,
+  }) async {
+    if (quantity <= 0) {
+      throw StateError('Return quantity must be greater than zero.');
+    }
+    if (unitPrice < 0) {
+      throw StateError('Return price cannot be negative.');
+    }
+
+    final db = await database;
+    return db.transaction((txn) async {
+      final saleRows = await txn.query(
+        'sales',
+        where: 'id=? AND invoice_no=?',
+        whereArgs: [saleId, invoiceNo],
+        limit: 1,
+      );
+      if (saleRows.isEmpty) {
+        throw StateError('Original invoice could not be found.');
+      }
+
+      final lineRows = await txn.query(
+        'sale_lines',
+        where: 'id=? AND sale_id=? AND inventory_id=?',
+        whereArgs: [saleLineId, saleId, inventoryId],
+        limit: 1,
+      );
+      if (lineRows.isEmpty) {
+        throw StateError('Selected material was not sold on this invoice.');
+      }
+
+      final soldQty = (lineRows.first['quantity'] as num).toInt();
+      final alreadyReturned = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COALESCE(SUM(quantity), 0) FROM return_lines WHERE sale_line_id=?',
+              [saleLineId],
+            ),
+          ) ??
+          0;
+      final availableToReturn = soldQty - alreadyReturned;
+
+      if (availableToReturn <= 0) {
+        throw StateError('This material has already been fully returned.');
+      }
+      if (quantity > availableToReturn) {
+        throw StateError(
+          'Only $availableToReturn box(es) can still be returned.',
+        );
+      }
+
+      final inventoryRows = await txn.query(
+        'inventory',
+        where: 'id=? AND deleted=0',
+        whereArgs: [inventoryId],
+        limit: 1,
+      );
+      if (inventoryRows.isEmpty) {
+        throw StateError('Inventory item could not be found.');
+      }
+
+      final returnNo = await _nextReturnNoTxn(txn);
+      final total = quantity * unitPrice;
+      final now = DateTime.now().toIso8601String();
+
+      final returnId = await txn.insert('returns', {
+        'return_no': returnNo,
+        'sale_id': saleId,
+        'invoice_no': invoiceNo,
+        'customer_id': customerId,
+        'customer_name': customerName,
+        'return_date': now,
+        'reason': reason.trim(),
+        'total_amount': total,
+        'sync_state': 'pending',
+      });
+
+      await txn.insert('return_lines', {
+        'return_id': returnId,
+        'sale_id': saleId,
+        'sale_line_id': saleLineId,
+        'inventory_id': inventoryId,
+        'tile_name': tileName,
+        'quantity': quantity,
+        'unit_price': unitPrice,
+        'line_total': total,
+      });
+
+      await txn.rawUpdate('''
+        UPDATE inventory
+        SET stock = stock + ?,
+            sync_state = 'pending',
+            updated_at = ?
+        WHERE id = ?
+      ''', [quantity, now, inventoryId]);
+
+      return returnId;
+    });
+  }
+
+  Future<String> _nextReturnNoTxn(Transaction txn) async {
+    final count =
+        Sqflite.firstIntValue(await txn.rawQuery('SELECT COUNT(*) FROM returns')) ??
+            0;
+    final now = DateTime.now();
+    final date =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    return 'RET/$date/${(count + 1).toString().padLeft(4, '0')}';
+  }
+
+  Future<List<Map<String, Object?>>> returnsHistory() async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        r.id,
+        r.return_no,
+        r.invoice_no,
+        r.customer_name,
+        r.return_date,
+        r.reason,
+        r.total_amount,
+        r.sync_state,
+        COALESCE(SUM(rl.quantity), 0) AS total_boxes
+      FROM returns r
+      LEFT JOIN return_lines rl ON rl.return_id = r.id
+      GROUP BY r.id
+      ORDER BY r.return_date DESC
+    ''');
+  }
+
+  Future<List<Map<String, Object?>>> pendingReturnsWithLines() async {
+    final db = await database;
+    final returnRows = await db.query(
+      'returns',
+      where: "sync_state='pending'",
+      orderBy: 'id',
+    );
+    final result = <Map<String, Object?>>[];
+
+    for (final header in returnRows) {
+      final lines = await db.query(
+        'return_lines',
+        where: 'return_id=?',
+        whereArgs: [header['id']],
+      );
+
+      final cloudLines = <Map<String, Object?>>[];
+      for (final line in lines) {
+        final copy = Map<String, Object?>.from(line);
+        final inventoryId = (copy['inventory_id'] as num?)?.toInt();
+        if (inventoryId != null) {
+          final inv = await db.query(
+            'inventory',
+            columns: ['client_uid'],
+            where: 'id=?',
+            whereArgs: [inventoryId],
+            limit: 1,
+          );
+          if (inv.isNotEmpty) {
+            copy['inventory_client_uid'] =
+                (inv.first['client_uid'] ?? '').toString();
+          }
+        }
+        cloudLines.add(copy);
+      }
+
+      result.add({
+        'return': Map<String, Object?>.from(header),
+        'lines': cloudLines,
+      });
+    }
+    return result;
+  }
+
+  Future<void> markReturnSynced(int id) async {
+    final db = await database;
+    await db.update(
+      'returns',
+      {'sync_state': 'synced'},
+      where: 'id=?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> setLastSync(String value) async {

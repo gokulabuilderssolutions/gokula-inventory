@@ -9,6 +9,7 @@ import '../services/sync_service.dart';
 import '../services/update_preferences.dart';
 import 'inventory_screen.dart';
 import 'login_screen.dart';
+import 'returns_screen.dart';
 import 'sales_screen.dart';
 import 'update_settings_screen.dart';
 
@@ -31,7 +32,9 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     refreshStatus();
     SyncService.instance.startAutoSync();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _runAutomaticUpdateCheck());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _runAutomaticUpdateCheck(),
+    );
     SyncService.instance.onlineStream.listen((value) {
       if (mounted) setState(() => online = value);
       refreshStatus();
@@ -54,10 +57,13 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final update = await AppUpdateService.checkForUpdate();
       if (!mounted) return;
+
       if (update == null) {
         if (showNoUpdate) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('You already have the latest version.')),
+            const SnackBar(
+              content: Text('You already have the latest version.'),
+            ),
           );
         }
         return;
@@ -71,19 +77,30 @@ class _HomeScreenState extends State<HomeScreen> {
       if (apk == null && autoDownload) {
         apk = await _downloadUpdate(update, automatic: true);
         if (!mounted || apk == null) return;
-        await _showInstallPrompt(update, apk, downloadedAutomatically: true);
+        await _showInstallPrompt(
+          update,
+          apk,
+          downloadedAutomatically: true,
+        );
         return;
       }
 
       if (apk != null) {
-        await _showInstallPrompt(update, apk, downloadedAutomatically: false);
+        await _showInstallPrompt(
+          update,
+          apk,
+          downloadedAutomatically: false,
+        );
         return;
       }
 
       final shouldUpdate = await _showUpdateDialog(update);
       if (shouldUpdate != true || !mounted) return;
+
       apk = await _downloadUpdate(update, automatic: false);
-      if (apk != null) await AppUpdateService.installApk(apk);
+      if (apk != null) {
+        await AppUpdateService.installApk(apk);
+      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -107,7 +124,10 @@ class _HomeScreenState extends State<HomeScreen> {
               Text('Version ${update.version} is available.'),
               if (update.releaseNotes.trim().isNotEmpty) ...[
                 const SizedBox(height: 12),
-                const Text('What is new:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text(
+                  'What is new:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 4),
                 Text(update.releaseNotes.trim()),
               ],
@@ -133,6 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required bool automatic,
   }) async {
     final progress = ValueNotifier<double>(0);
+
     if (mounted) {
       showDialog<void>(
         context: context,
@@ -140,15 +161,25 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => PopScope(
           canPop: false,
           child: AlertDialog(
-            title: Text(automatic ? 'Downloading update on Wi-Fi' : 'Downloading update'),
+            title: Text(
+              automatic
+                  ? 'Downloading update on Wi-Fi'
+                  : 'Downloading update',
+            ),
             content: ValueListenableBuilder<double>(
               valueListenable: progress,
               builder: (_, value, __) => Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  LinearProgressIndicator(value: value == 0 ? null : value),
+                  LinearProgressIndicator(
+                    value: value == 0 ? null : value,
+                  ),
                   const SizedBox(height: 12),
-                  Text(value == 0 ? 'Starting download…' : '${(value * 100).round()}%'),
+                  Text(
+                    value == 0
+                        ? 'Starting download…'
+                        : '${(value * 100).round()}%',
+                  ),
                 ],
               ),
             ),
@@ -163,7 +194,8 @@ class _HomeScreenState extends State<HomeScreen> {
         onProgress: (value) => progress.value = value,
       );
     } finally {
-      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+      if (mounted &&
+          Navigator.of(context, rootNavigator: true).canPop()) {
         Navigator.of(context, rootNavigator: true).pop();
       }
       progress.dispose();
@@ -197,13 +229,17 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-    if (install == true) await AppUpdateService.installApk(apk);
+
+    if (install == true) {
+      await AppUpdateService.installApk(apk);
+    }
   }
 
   Future<void> refreshStatus() async {
     final o = await SyncService.instance.isOnline();
     final p = await LocalDb.instance.pendingCount();
     final l = await LocalDb.instance.getLastSync();
+
     if (mounted) {
       setState(() {
         online = o;
@@ -217,10 +253,37 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => syncing = true);
     final message = await SyncService.instance.syncNow();
     await refreshStatus();
+
     if (mounted) {
       setState(() => syncing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
     }
+  }
+
+  Future<void> _openInventory() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const InventoryScreen()),
+    );
+    await refreshStatus();
+  }
+
+  Future<void> _openSales() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SalesScreen()),
+    );
+    await refreshStatus();
+  }
+
+  Future<void> _openReturns() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ReturnsScreen()),
+    );
+    await refreshStatus();
   }
 
   @override
@@ -235,7 +298,9 @@ class _HomeScreenState extends State<HomeScreen> {
               await AuthService().logout();
               if (!context.mounted) return;
               Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const LoginScreen(),
+                ),
                 (route) => false,
               );
             },
@@ -245,7 +310,9 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Update settings',
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const UpdateSettingsScreen()),
+              MaterialPageRoute(
+                builder: (_) => const UpdateSettingsScreen(),
+              ),
             ),
             icon: const Icon(Icons.settings),
           ),
@@ -263,6 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 : const Icon(Icons.system_update),
           ),
           IconButton(
+            tooltip: 'Sync now',
             onPressed: syncing ? null : sync,
             icon: syncing
                 ? const SizedBox(
@@ -280,7 +348,11 @@ class _HomeScreenState extends State<HomeScreen> {
           Center(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(22),
-              child: Image.asset('assets/images/logo.jpg', height: 180, fit: BoxFit.cover),
+              child: Image.asset(
+                'assets/images/logo.jpg',
+                height: 180,
+                fit: BoxFit.cover,
+              ),
             ),
           ),
           const SizedBox(height: 18),
@@ -292,11 +364,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.circle, size: 14, color: online ? Colors.green : Colors.red),
+                      Icon(
+                        Icons.circle,
+                        size: 14,
+                        color: online ? Colors.green : Colors.red,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         online ? 'Online' : 'Offline',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ],
                   ),
@@ -321,30 +399,33 @@ class _HomeScreenState extends State<HomeScreen> {
             child: ListTile(
               leading: const Icon(Icons.inventory_2),
               title: const Text('Inventory'),
-              subtitle: const Text('Add tiles and stock, even without internet'),
+              subtitle: const Text(
+                'Add tiles and stock, even without internet',
+              ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const InventoryScreen()),
-                );
-                refreshStatus();
-              },
+              onTap: _openInventory,
             ),
           ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.receipt_long),
               title: const Text('Sales'),
-              subtitle: const Text('Create invoices and automatically reduce stock'),
+              subtitle: const Text(
+                'Create invoices and automatically reduce stock',
+              ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SalesScreen()),
-                );
-                refreshStatus();
-              },
+              onTap: _openSales,
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.assignment_return),
+              title: const Text('Returns'),
+              subtitle: const Text(
+                'Find invoice or customer and return sold boxes',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _openReturns,
             ),
           ),
         ],
