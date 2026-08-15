@@ -331,15 +331,3 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
   );
 }
-
-class _InventoryImage extends StatelessWidget {
-  final InventoryItem item;
-  const _InventoryImage({required this.item});
-  @override
-  Widget build(BuildContext context) {
-    final file = item.localImage.isEmpty ? null : File(item.localImage);
-    if (file != null && file.existsSync()) return ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(file, width: 58, height: 58, fit: BoxFit.cover));
-    if (item.imageUrl.isNotEmpty) return ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(item.imageUrl, width: 58, height: 58, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const CircleAvatar(child: Icon(Icons.broken_image))));
-    return const CircleAvatar(child: Icon(Icons.inventory_2));
-  }
-}
