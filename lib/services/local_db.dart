@@ -399,6 +399,112 @@ class LocalDb {
     return db.insert('customers', customer.toMap()..remove('id'));
   }
 
+  Future<List<String>> salesDesignNames() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT DISTINCT tile_name
+      FROM sale_lines
+      WHERE TRIM(tile_name) <> ''
+      ORDER BY tile_name COLLATE NOCASE
+    ''');
+    return rows
+        .map((row) => (row['tile_name'] ?? '').toString())
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  Future<List<String>> salesCustomerNames() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT DISTINCT customer_name
+      FROM sales
+      WHERE TRIM(customer_name) <> ''
+      ORDER BY customer_name COLLATE NOCASE
+    ''');
+    return rows
+        .map((row) => (row['customer_name'] ?? '').toString())
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  Future<List<Map<String, Object?>>> salesHistoryByDesign(
+    String designName,
+  ) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        s.id AS sale_id,
+        s.invoice_no,
+        s.customer_name,
+        s.created_at,
+        sl.id AS sale_line_id,
+        sl.inventory_id,
+        sl.tile_name,
+        sl.quantity AS boxes_sold,
+        sl.unit_price,
+        sl.line_total,
+        COALESCE(SUM(rl.quantity), 0) AS boxes_returned,
+        COALESCE(i.stock, 0) AS stock_remaining
+      FROM sale_lines sl
+      INNER JOIN sales s ON s.id = sl.sale_id
+      LEFT JOIN return_lines rl ON rl.sale_line_id = sl.id
+      LEFT JOIN inventory i ON i.id = sl.inventory_id
+      WHERE LOWER(sl.tile_name) = LOWER(?)
+      GROUP BY
+        s.id,
+        s.invoice_no,
+        s.customer_name,
+        s.created_at,
+        sl.id,
+        sl.inventory_id,
+        sl.tile_name,
+        sl.quantity,
+        sl.unit_price,
+        sl.line_total,
+        i.stock
+      ORDER BY s.created_at DESC
+    ''', [designName.trim()]);
+  }
+
+  Future<List<Map<String, Object?>>> salesHistoryByCustomer(
+    String customerName,
+  ) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        s.id AS sale_id,
+        s.invoice_no,
+        s.customer_name,
+        s.created_at,
+        sl.id AS sale_line_id,
+        sl.inventory_id,
+        sl.tile_name,
+        sl.quantity AS boxes_sold,
+        sl.unit_price,
+        sl.line_total,
+        COALESCE(SUM(rl.quantity), 0) AS boxes_returned,
+        COALESCE(i.stock, 0) AS stock_remaining
+      FROM sales s
+      INNER JOIN sale_lines sl ON sl.sale_id = s.id
+      LEFT JOIN return_lines rl ON rl.sale_line_id = sl.id
+      LEFT JOIN inventory i ON i.id = sl.inventory_id
+      WHERE LOWER(s.customer_name) = LOWER(?)
+      GROUP BY
+        s.id,
+        s.invoice_no,
+        s.customer_name,
+        s.created_at,
+        sl.id,
+        sl.inventory_id,
+        sl.tile_name,
+        sl.quantity,
+        sl.unit_price,
+        sl.line_total,
+        i.stock
+      ORDER BY s.created_at DESC, sl.tile_name COLLATE NOCASE
+    ''', [customerName.trim()]);
+  }
+
   Future<String> nextInvoiceNo() async {
     final db = await database;
     final count = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM sales')) ?? 0;

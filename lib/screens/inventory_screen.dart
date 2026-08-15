@@ -10,6 +10,7 @@ import '../services/local_db.dart';
 import '../services/stock_report_service.dart';
 import 'master_data_screen.dart';
 import 'bulk_inventory_screen.dart';
+import 'inventory_search_list.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -320,15 +321,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
       IconButton(onPressed: exportImageWiseReport, tooltip: 'Export image-wise report', icon: const Icon(Icons.picture_as_pdf)),
     ]),
     floatingActionButton: FloatingActionButton.extended(onPressed: () => itemDialog(), icon: const Icon(Icons.add), label: const Text('Add Tile')),
-    body: loading ? const Center(child: CircularProgressIndicator()) : RefreshIndicator(onRefresh: load, child: ListView.builder(padding: const EdgeInsets.all(12), itemCount: items.length, itemBuilder: (_, index) {
-      final item = items[index];
-      return Card(child: ListTile(
-        leading: _InventoryImage(item: item), title: Text(item.tileName, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text('${item.size} • ${item.texture}\nStock: ${item.stock}  Price: ₹${item.price.toStringAsFixed(2)}'), isThreeLine: true,
-        onTap: () => itemDialog(item),
-        trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') itemDialog(item); if (v == 'delete') deleteItem(item); }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))]),
-      ));
-    })),
+    body: loading
+        ? const Center(child: CircularProgressIndicator())
+        : InventorySearchList(
+            items: items,
+            onRefresh: load,
+            onEdit: itemDialog,
+            onDelete: deleteItem,
+          ),
   );
 }
 

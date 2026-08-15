@@ -6,6 +6,7 @@ import '../models/inventory_item.dart';
 import '../models/sale.dart';
 import '../services/invoice_service.dart';
 import '../services/local_db.dart';
+import 'sales_search_panel.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -74,6 +75,8 @@ class _SalesScreenState extends State<SalesScreen> {
                       ]),
                     ),
                   ),
+                  const SalesSearchPanel(),
+                  const SizedBox(height: 8),
                   if (sales.isEmpty)
                     const Padding(padding: EdgeInsets.only(top: 80), child: Center(child: Text('No sales yet. Tap New Sale to create your first invoice.')))
                   else
