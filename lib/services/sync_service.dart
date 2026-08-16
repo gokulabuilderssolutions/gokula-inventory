@@ -405,6 +405,35 @@ class SyncService {
           );
           returnsUploaded++;
         }
+
+        // Download Returns created on other phones.
+        final cloudReturns = await client
+            .from('returns')
+            .select('*')
+            .order('return_date');
+
+        for (final rawHeader in cloudReturns) {
+          final header = Map<String, dynamic>.from(rawHeader);
+
+          final cloudReturnId =
+              (header['id'] as num?)?.toInt();
+
+          if (cloudReturnId == null) continue;
+
+          final rawLines = await client
+              .from('return_lines')
+              .select('*')
+              .eq('return_id', cloudReturnId);
+
+          final lines = rawLines
+              .map((row) => Map<String, dynamic>.from(row))
+              .toList();
+
+          await LocalDb.instance.upsertCloudReturn(
+            header,
+            lines,
+          );
+        }
       } catch (e) {
         return 'Returns sync error: $e';
       }

@@ -930,6 +930,139 @@ class LocalDb {
     return result;
   }
 
+
+  Future<void> upsertCloudReturn(
+    Map<String, dynamic> header,
+    List<Map<String, dynamic>> cloudLines,
+  ) async {
+    final db = await database;
+
+    await db.transaction((txn) async {
+      final returnNo = (header['return_no'] ?? '').toString();
+      final invoiceNo =
+          (header['sale_invoice_no'] ?? header['invoice_no'] ?? '').toString();
+
+      if (returnNo.isEmpty || invoiceNo.isEmpty) return;
+
+      final saleRows = await txn.query(
+        'sales',
+        where: 'invoice_no=?',
+        whereArgs: [invoiceNo],
+        limit: 1,
+      );
+
+      if (saleRows.isEmpty) return;
+
+      final saleId = saleRows.first['id'] as int;
+      final customerId = saleRows.first['customer_id'] as int?;
+      final customerName =
+          (header['customer_name'] ?? saleRows.first['customer_name'] ?? '')
+              .toString();
+
+      final existing = await txn.query(
+        'returns',
+        where: 'return_no=?',
+        whereArgs: [returnNo],
+        limit: 1,
+      );
+
+      if (existing.isNotEmpty &&
+          (existing.first['sync_state'] ?? '') == 'pending') {
+        return;
+      }
+
+      final values = <String, Object?>{
+        'return_no': returnNo,
+        'sale_id': saleId,
+        'invoice_no': invoiceNo,
+        'customer_id': customerId,
+        'customer_name': customerName,
+        'return_date':
+            (header['return_date'] ?? DateTime.now().toIso8601String())
+                .toString(),
+        'reason': (header['reason'] ?? '').toString(),
+        'total_amount':
+            (header['total_amount'] as num?)?.toDouble() ?? 0,
+        'sync_state': 'synced',
+      };
+
+      int returnId;
+
+      if (existing.isEmpty) {
+        returnId = await txn.insert('returns', values);
+      } else {
+        returnId = existing.first['id'] as int;
+        await txn.update(
+          'returns',
+          values,
+          where: 'id=?',
+          whereArgs: [returnId],
+        );
+        await txn.delete(
+          'return_lines',
+          where: 'return_id=?',
+          whereArgs: [returnId],
+        );
+      }
+
+      for (final line in cloudLines) {
+        final inventoryUid =
+            (line['inventory_client_uid'] ?? '').toString();
+        final tileName = (line['tile_name'] ?? '').toString();
+
+        int? inventoryId;
+
+        if (inventoryUid.isNotEmpty) {
+          final invRows = await txn.query(
+            'inventory',
+            where: 'client_uid=?',
+            whereArgs: [inventoryUid],
+            limit: 1,
+          );
+          if (invRows.isNotEmpty) {
+            inventoryId = invRows.first['id'] as int?;
+          }
+        }
+
+        if (inventoryId == null && tileName.isNotEmpty) {
+          final invRows = await txn.query(
+            'inventory',
+            where: 'tile_name=? AND deleted=0',
+            whereArgs: [tileName],
+            limit: 1,
+          );
+          if (invRows.isNotEmpty) {
+            inventoryId = invRows.first['id'] as int?;
+          }
+        }
+
+        if (inventoryId == null) continue;
+
+        final saleLineRows = await txn.query(
+          'sale_lines',
+          where: 'sale_id=? AND inventory_id=?',
+          whereArgs: [saleId, inventoryId],
+          limit: 1,
+        );
+
+        if (saleLineRows.isEmpty) continue;
+
+        final saleLineId = saleLineRows.first['id'] as int;
+
+        await txn.insert('return_lines', {
+          'return_id': returnId,
+          'sale_id': saleId,
+          'sale_line_id': saleLineId,
+          'inventory_id': inventoryId,
+          'tile_name': tileName,
+          'quantity': (line['quantity'] as num?)?.toInt() ?? 0,
+          'unit_price': (line['unit_price'] as num?)?.toDouble() ?? 0,
+          'line_total': (line['line_total'] as num?)?.toDouble() ?? 0,
+        });
+      }
+    });
+  }
+
   Future<void> markReturnSynced(int id) async {
     final db = await database;
     await db.update(
