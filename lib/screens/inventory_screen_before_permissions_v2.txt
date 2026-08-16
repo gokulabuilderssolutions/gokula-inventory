@@ -71,72 +71,62 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
-          title: const Row(
+          title: const Text('Export Inventory PDF'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.filter_alt_outlined),
-              SizedBox(width: 8),
-              Text('Export Inventory PDF'),
+              DropdownButtonFormField<String>(
+                initialValue: selectedSize,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Size',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  const DropdownMenuItem(
+                    value: 'All Sizes',
+                    child: Text('All Sizes'),
+                  ),
+                  ...sizes.map(
+                    (size) => DropdownMenuItem(
+                      value: size,
+                      child: Text(size),
+                    ),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setLocal(() => selectedSize = value);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: selectedFinish,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Finish',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  const DropdownMenuItem(
+                    value: 'All Finishes',
+                    child: Text('All Finishes'),
+                  ),
+                  ...finishes.map(
+                    (finish) => DropdownMenuItem(
+                      value: finish,
+                      child: Text(finish),
+                    ),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setLocal(() => selectedFinish = value);
+                  }
+                },
+              ),
             ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  initialValue: selectedSize,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Size',
-                    prefixIcon: Icon(Icons.straighten),
-                    border: OutlineInputBorder(),
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: 'All Sizes',
-                      child: Text('All Sizes'),
-                    ),
-                    ...sizes.map(
-                      (size) => DropdownMenuItem(
-                        value: size,
-                        child: Text(size),
-                      ),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) {
-                      setLocal(() => selectedSize = value);
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  initialValue: selectedFinish,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Finish',
-                    prefixIcon: Icon(Icons.texture),
-                    border: OutlineInputBorder(),
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: 'All Finishes',
-                      child: Text('All Finishes'),
-                    ),
-                    ...finishes.map(
-                      (finish) => DropdownMenuItem(
-                        value: finish,
-                        child: Text(finish),
-                      ),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) {
-                      setLocal(() => selectedFinish = value);
-                    }
-                  },
-                ),
-              ],
-            ),
           ),
           actions: [
             TextButton(
@@ -600,9 +590,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             onPressed: () async {
               await Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const BulkInventoryScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const BulkInventoryScreen()),
               );
             },
           ),
@@ -613,9 +601,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             onPressed: () async {
               await Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const MasterDataScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const MasterDataScreen()),
               );
             },
           ),

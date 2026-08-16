@@ -6,16 +6,20 @@ import '../models/inventory_item.dart';
 
 class InventorySearchList extends StatefulWidget {
   final List<InventoryItem> items;
+  final bool isAdmin;
   final Future<void> Function() onRefresh;
   final Future<void> Function(InventoryItem item) onEdit;
   final Future<void> Function(InventoryItem item) onDelete;
+  final Future<void> Function(InventoryItem item) onPhotoEdit;
 
   const InventorySearchList({
     super.key,
     required this.items,
+    required this.isAdmin,
     required this.onRefresh,
     required this.onEdit,
     required this.onDelete,
+    required this.onPhotoEdit,
   });
 
   @override
@@ -65,7 +69,6 @@ class _InventorySearchListState extends State<InventorySearchList> {
       final bb = b.toLowerCase();
       final aStarts = aa.startsWith(q);
       final bStarts = bb.startsWith(q);
-
       if (aStarts != bStarts) return aStarts ? -1 : 1;
       return aa.compareTo(bb);
     });
@@ -76,7 +79,6 @@ class _InventorySearchListState extends State<InventorySearchList> {
   List<InventoryItem> get _visibleItems {
     final q = _searchController.text.trim().toLowerCase();
     if (q.isEmpty) return widget.items;
-
     return widget.items
         .where((item) => item.tileName.toLowerCase().contains(q))
         .toList();
@@ -126,9 +128,7 @@ class _InventorySearchListState extends State<InventorySearchList> {
             Container(
               constraints: const BoxConstraints(maxHeight: 220),
               decoration: BoxDecoration(
-                border: Border.all(
-                  color: Theme.of(context).dividerColor,
-                ),
+                border: Border.all(color: Theme.of(context).dividerColor),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: ListView.separated(
@@ -151,9 +151,7 @@ class _InventorySearchListState extends State<InventorySearchList> {
           if (visible.isEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 50),
-              child: Center(
-                child: Text('No matching design found.'),
-              ),
+              child: Center(child: Text('No matching design found.')),
             )
           else
             ...visible.map(
@@ -170,23 +168,25 @@ class _InventorySearchListState extends State<InventorySearchList> {
                     'Price: ₹${item.price.toStringAsFixed(2)}',
                   ),
                   isThreeLine: true,
-                  onTap: () => widget.onEdit(item),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (value) {
-                      if (value == 'edit') widget.onEdit(item);
-                      if (value == 'delete') widget.onDelete(item);
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: 'edit',
-                        child: Text('Edit'),
-                      ),
-                      PopupMenuItem(
-                        value: 'delete',
-                        child: Text('Delete'),
-                      ),
-                    ],
-                  ),
+                  onTap: () => widget.isAdmin
+                      ? widget.onEdit(item)
+                      : widget.onPhotoEdit(item),
+                  trailing: widget.isAdmin
+                      ? PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'edit') widget.onEdit(item);
+                            if (value == 'delete') widget.onDelete(item);
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          ],
+                        )
+                      : IconButton(
+                          tooltip: 'Add / change photo',
+                          onPressed: () => widget.onPhotoEdit(item),
+                          icon: const Icon(Icons.add_a_photo_outlined),
+                        ),
                 ),
               ),
             ),
@@ -204,18 +204,12 @@ class _SearchInventoryImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final file =
-        item.localImage.isEmpty ? null : File(item.localImage);
+    final file = item.localImage.isEmpty ? null : File(item.localImage);
 
     if (file != null && file.existsSync()) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: Image.file(
-          file,
-          width: 58,
-          height: 58,
-          fit: BoxFit.cover,
-        ),
+        child: Image.file(file, width: 58, height: 58, fit: BoxFit.cover),
       );
     }
 
@@ -233,8 +227,6 @@ class _SearchInventoryImage extends StatelessWidget {
       );
     }
 
-    return const CircleAvatar(
-      child: Icon(Icons.inventory_2),
-    );
+    return const CircleAvatar(child: Icon(Icons.inventory_2));
   }
 }
