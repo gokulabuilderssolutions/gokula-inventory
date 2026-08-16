@@ -221,6 +221,10 @@ class SyncService {
           sale.remove('id');
           sale.remove('sync_state');
 
+          // customer_id is a local SQLite reference.
+          // Supabase sales table does not have this column.
+          sale.remove('customer_id');
+
           final cloudLines = <Map<String, Object?>>[];
 
           for (final line in lines) {
