@@ -631,6 +631,66 @@ class LocalDb {
     return rows.map(SaleLine.fromMap).toList();
   }
 
+
+  Future<void> renameSaleInvoiceForSync(
+    int saleId,
+    String newInvoiceNo,
+  ) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final saleRows = await txn.query(
+        'sales',
+        columns: ['invoice_no'],
+        where: 'id=?',
+        whereArgs: [saleId],
+        limit: 1,
+      );
+
+      if (saleRows.isEmpty) {
+        throw StateError('Sale not found while renaming invoice.');
+      }
+
+      final oldInvoiceNo =
+          (saleRows.first['invoice_no'] ?? '').toString();
+
+      if (oldInvoiceNo == newInvoiceNo) return;
+
+      final duplicate = await txn.query(
+        'sales',
+        columns: ['id'],
+        where: 'invoice_no=? AND id<>?',
+        whereArgs: [newInvoiceNo, saleId],
+        limit: 1,
+      );
+
+      if (duplicate.isNotEmpty) {
+        throw StateError(
+          'Invoice $newInvoiceNo already exists on this phone.',
+        );
+      }
+
+      await txn.update(
+        'sales',
+        {
+          'invoice_no': newInvoiceNo,
+          'sync_state': 'pending',
+        },
+        where: 'id=?',
+        whereArgs: [saleId],
+      );
+
+      await txn.update(
+        'returns',
+        {
+          'invoice_no': newInvoiceNo,
+          'sync_state': 'pending',
+        },
+        where: 'sale_id=?',
+        whereArgs: [saleId],
+      );
+    });
+  }
+
   Future<List<Map<String, Object?>>> pendingSalesWithLines() async {
     final db = await database;
     final sales = await db.query('sales', where: "sync_state='pending'", orderBy: 'id');
