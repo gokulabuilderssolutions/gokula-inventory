@@ -1,8 +1,7 @@
 name: gokula_inventory
 description: Offline-first tile inventory app with Supabase sync.
 publish_to: 'none'
-version: 1.6.13+22
-
+version: 1.6.14+23
 environment:
   sdk: '>=3.3.0 <4.0.0'
 
