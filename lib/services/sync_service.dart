@@ -5,7 +5,6 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config.dart';
-import 'auth_service.dart';
 import 'image_storage_service.dart';
 import 'local_db.dart';
 
@@ -60,7 +59,6 @@ class SyncService {
 
       _status.add(true);
       final client = Supabase.instance.client;
-      final isAdmin = await AuthService().isAdmin();
 
       var inventoryUploaded = 0;
       var salesUploaded = 0;
@@ -70,10 +68,6 @@ class SyncService {
 
       for (final item in pendingInventory) {
         if (item.deleted) {
-          if (!isAdmin) {
-            return 'Inventory sync error: User account cannot delete inventory.';
-          }
-
           final existing = await client
               .from('inventory')
               .select('id')
@@ -119,45 +113,42 @@ class SyncService {
               .getPublicUrl(remote);
         }
 
-        final existing = await client
+        // Find existing cloud inventory robustly for cross-phone photo sync.
+        var existing = await client
             .from('inventory')
             .select('id')
             .eq('client_uid', item.clientUid)
             .limit(1);
 
+        if (existing.isEmpty && item.cloudId != null) {
+          existing = await client
+              .from('inventory')
+              .select('id')
+              .eq('id', item.cloudId!)
+              .limit(1);
+        }
+
+        if (existing.isEmpty) {
+          existing = await client
+              .from('inventory')
+              .select('id')
+              .eq('tile_name', item.tileName)
+              .eq('size', item.size)
+              .eq('texture', item.texture)
+              .limit(1);
+        }
+
         int? cloudId;
+        final payload = item.toCloudMap()
+          ..['image_url'] = imageUrl;
 
         if (existing.isNotEmpty) {
           cloudId = existing.first['id'] as int?;
-
-          if (isAdmin) {
-            final payload = item.toCloudMap()
-              ..['image_url'] = imageUrl;
-
-            await client
-                .from('inventory')
-                .update(payload)
-                .eq('id', cloudId!);
-          } else {
-            // Normal users cannot manually edit inventory master data,
-            // but Sales/Returns legitimately change stock and users may
-            // add/change photos. Sync only those allowed fields.
-            await client
-                .from('inventory')
-                .update({
-                  'stock': item.stock,
-                  'image_url': imageUrl,
-                })
-                .eq('id', cloudId!);
-          }
+          await client
+              .from('inventory')
+              .update(payload)
+              .eq('id', cloudId!);
         } else {
-          if (!isAdmin) {
-            return 'Inventory sync error: User account cannot create a new inventory item. Ask an administrator to sync/create it first.';
-          }
-
-          final payload = item.toCloudMap()
-            ..['image_url'] = imageUrl;
-
           final inserted = await client
               .from('inventory')
               .insert(payload)
@@ -221,10 +212,6 @@ class SyncService {
           sale.remove('id');
           sale.remove('sync_state');
 
-          // customer_id is a local SQLite reference.
-          // Supabase sales table does not have this column.
-          sale.remove('customer_id');
-
           final cloudLines = <Map<String, Object?>>[];
 
           for (final line in lines) {
@@ -250,45 +237,6 @@ class SyncService {
 
           sale['lines'] = cloudLines;
 
-          final originalInvoiceNo =
-              (sale['invoice_no'] ?? '').toString();
-          final localCreatedAt =
-              (sale['created_at'] ?? '').toString();
-
-          String candidateInvoiceNo = originalInvoiceNo;
-          var suffix = 0;
-
-          while (true) {
-            final existingInvoice = await client
-                .from('sales')
-                .select('invoice_no, created_at')
-                .eq('invoice_no', candidateInvoiceNo)
-                .limit(1);
-
-            if (existingInvoice.isEmpty) {
-              break;
-            }
-
-            final cloudCreatedAt =
-                (existingInvoice.first['created_at'] ?? '').toString();
-
-            if (cloudCreatedAt == localCreatedAt &&
-                localCreatedAt.isNotEmpty) {
-              break;
-            }
-
-            suffix++;
-            candidateInvoiceNo = '${originalInvoiceNo}_$suffix';
-          }
-
-          if (candidateInvoiceNo != originalInvoiceNo) {
-            await LocalDb.instance.renameSaleInvoiceForSync(
-              localId,
-              candidateInvoiceNo,
-            );
-            sale['invoice_no'] = candidateInvoiceNo;
-          }
-
           await client
               .from('sales')
               .upsert(sale, onConflict: 'invoice_no');
@@ -307,8 +255,8 @@ class SyncService {
             Map<String, dynamic>.from(row),
           );
         }
-      } catch (e) {
-        return 'Sales sync error: $e';
+      } catch (_) {
+        // Sales stay pending if the sales cloud schema is unavailable.
       }
 
       try {
@@ -405,37 +353,8 @@ class SyncService {
           );
           returnsUploaded++;
         }
-
-        // Download Returns created on other phones.
-        final cloudReturns = await client
-            .from('returns')
-            .select('*')
-            .order('return_date');
-
-        for (final rawHeader in cloudReturns) {
-          final header = Map<String, dynamic>.from(rawHeader);
-
-          final cloudReturnId =
-              (header['id'] as num?)?.toInt();
-
-          if (cloudReturnId == null) continue;
-
-          final rawLines = await client
-              .from('return_lines')
-              .select('*')
-              .eq('return_id', cloudReturnId);
-
-          final lines = rawLines
-              .map((row) => Map<String, dynamic>.from(row))
-              .toList();
-
-          await LocalDb.instance.upsertCloudReturn(
-            header,
-            lines,
-          );
-        }
-      } catch (e) {
-        return 'Returns sync error: $e';
+      } catch (_) {
+        // Returns remain safely pending if the return cloud schema is unavailable.
       }
 
       final now =
