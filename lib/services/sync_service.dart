@@ -211,6 +211,7 @@ class SyncService {
           final localId = sale['id'] as int;
           sale.remove('id');
           sale.remove('sync_state');
+          sale.remove('customer_id');
 
           final cloudLines = <Map<String, Object?>>[];
 
@@ -237,6 +238,45 @@ class SyncService {
 
           sale['lines'] = cloudLines;
 
+          final originalInvoiceNo =
+              (sale['invoice_no'] ?? '').toString();
+          final localCreatedAt =
+              (sale['created_at'] ?? '').toString();
+
+          String candidateInvoiceNo = originalInvoiceNo;
+          var suffix = 0;
+
+          while (true) {
+            final existingInvoice = await client
+                .from('sales')
+                .select('invoice_no, created_at')
+                .eq('invoice_no', candidateInvoiceNo)
+                .limit(1);
+
+            if (existingInvoice.isEmpty) {
+              break;
+            }
+
+            final cloudCreatedAt =
+                (existingInvoice.first['created_at'] ?? '').toString();
+
+            if (cloudCreatedAt == localCreatedAt &&
+                localCreatedAt.isNotEmpty) {
+              break;
+            }
+
+            suffix++;
+            candidateInvoiceNo = '${originalInvoiceNo}_$suffix';
+          }
+
+          if (candidateInvoiceNo != originalInvoiceNo) {
+            await LocalDb.instance.renameSaleInvoiceForSync(
+              localId,
+              candidateInvoiceNo,
+            );
+            sale['invoice_no'] = candidateInvoiceNo;
+          }
+
           await client
               .from('sales')
               .upsert(sale, onConflict: 'invoice_no');
@@ -255,8 +295,8 @@ class SyncService {
             Map<String, dynamic>.from(row),
           );
         }
-      } catch (_) {
-        // Sales stay pending if the sales cloud schema is unavailable.
+      } catch (e) {
+        return 'Sales sync error: $e';
       }
 
       try {
