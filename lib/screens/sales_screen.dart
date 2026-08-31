@@ -5,6 +5,7 @@ import '../models/customer.dart';
 import '../models/inventory_item.dart';
 import '../models/sale.dart';
 import '../services/invoice_service.dart';
+import '../services/auth_service.dart';
 import '../services/local_db.dart';
 import 'sales_search_panel.dart';
 
@@ -18,11 +19,18 @@ class SalesScreen extends StatefulWidget {
 class _SalesScreenState extends State<SalesScreen> {
   List<Sale> sales = [];
   bool loading = true;
+  bool isAdmin = false;
 
   @override
   void initState() {
     super.initState();
     load();
+    _loadPermissions();
+  }
+
+  Future<void> _loadPermissions() async {
+    final admin = await AuthService().isAdmin();
+    if (mounted) setState(() => isAdmin = admin);
   }
 
   Future<void> load() async {
@@ -40,6 +48,25 @@ class _SalesScreenState extends State<SalesScreen> {
     if (!mounted) return;
     final saved = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => SaleFormScreen(existingSale: sale, existingLines: lines)));
     if (saved == true) await load();
+  }
+
+  Future<void> deleteSale(Sale sale) async {
+    if (!isAdmin || sale.id == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete invoice?'),
+        content: Text('Delete ${sale.invoiceNo}? Stock will be recalculated and linked returns will also be removed.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await LocalDb.instance.deleteSaleAdmin(sale.id!);
+      await load();
+    }
   }
 
   Future<void> openInvoice(Sale sale) async {
@@ -91,11 +118,13 @@ class _SalesScreenState extends State<SalesScreen> {
                           trailing: PopupMenuButton<String>(
                             onSelected: (value) {
                               if (value == 'invoice') openInvoice(sale);
-                              if (value == 'edit') editSale(sale);
+                              if (value == 'edit' && isAdmin) editSale(sale);
+                              if (value == 'delete' && isAdmin) deleteSale(sale);
                             },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(value: 'invoice', child: ListTile(leading: Icon(Icons.picture_as_pdf), title: Text('View/Share invoice'))),
-                              PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit), title: Text('Edit sale'))),
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(value: 'invoice', child: ListTile(leading: Icon(Icons.picture_as_pdf), title: Text('View/Share invoice'))),
+                              if (isAdmin) const PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit), title: Text('Edit sale'))),
+                              if (isAdmin) const PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Delete invoice'))),
                             ],
                           ),
                           onTap: () => openInvoice(sale),
@@ -139,6 +168,7 @@ class _SaleFormScreenState extends State<SaleFormScreen> {
   double gstPercent = 18;
   String paymentMode = 'Cash';
   bool loading = true;
+  bool isAdmin = false;
   bool saving = false;
   late DateTime saleDate;
 

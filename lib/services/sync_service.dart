@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config.dart';
 import 'image_storage_service.dart';
+import 'auth_service.dart';
 import 'local_db.dart';
 
 class SyncService {
@@ -59,6 +60,7 @@ class SyncService {
 
       _status.add(true);
       final client = Supabase.instance.client;
+      final isAdmin = await AuthService().isAdmin();
 
       var inventoryUploaded = 0;
       var salesUploaded = 0;
@@ -68,6 +70,7 @@ class SyncService {
 
       for (final item in pendingInventory) {
         if (item.deleted) {
+          if (!isAdmin) return 'Inventory sync error: only Admin can delete inventory.';
           final existing = await client
               .from('inventory')
               .select('id')
@@ -144,11 +147,21 @@ class SyncService {
 
         if (existing.isNotEmpty) {
           cloudId = existing.first['id'] as int?;
+          final updatePayload = isAdmin
+              ? payload
+              : <String, Object?>{
+                  'stock': item.stock,
+                  'image_url': imageUrl,
+                  'updated_at': item.updatedAt,
+                };
           await client
               .from('inventory')
-              .update(payload)
+              .update(updatePayload)
               .eq('id', cloudId!);
         } else {
+          if (!isAdmin) {
+            return 'Inventory sync error: only Admin can create inventory.';
+          }
           final inserted = await client
               .from('inventory')
               .insert(payload)
@@ -166,6 +179,26 @@ class SyncService {
         }
 
         inventoryUploaded++;
+      }
+
+      // Process durable Admin deletion queue before downloading cloud data.
+      final pendingDeletions = await LocalDb.instance.pendingDeletions();
+      for (final deletion in pendingDeletions) {
+        if (!isAdmin) break;
+        final deletionId = (deletion['id'] as num).toInt();
+        final type = (deletion['entity_type'] ?? '').toString();
+        final key = (deletion['entity_key'] ?? '').toString();
+        if (type == 'return') {
+          final rows = await client.from('returns').select('id').eq('return_no', key).limit(1);
+          if (rows.isNotEmpty) {
+            final returnId = (rows.first['id'] as num).toInt();
+            await client.from('return_lines').delete().eq('return_id', returnId);
+            await client.from('returns').delete().eq('id', returnId);
+          }
+        } else if (type == 'sale') {
+          await client.from('sales').delete().eq('invoice_no', key);
+        }
+        await LocalDb.instance.markDeletionSynced(deletionId);
       }
 
       final cloudRows = await client.from('inventory').select('*');
@@ -359,33 +392,18 @@ class SyncService {
                 .eq('id', cloudReturnId);
           }
 
-          final existingCloudLines = await client
-              .from('return_lines')
-              .select('id')
-              .eq('return_id', cloudReturnId)
-              .limit(1);
-
-          if (existingCloudLines.isEmpty) {
-            for (final line in localLines) {
-              final linePayload = <String, Object?>{
-                'return_id': cloudReturnId,
-                'inventory_client_uid':
-                    (line['inventory_client_uid'] ?? '')
-                        .toString(),
-                'tile_name':
-                    (line['tile_name'] ?? '').toString(),
-                'quantity':
-                    (line['quantity'] as num?)?.toInt() ?? 0,
-                'unit_price':
-                    (line['unit_price'] as num?)?.toDouble() ?? 0,
-                'line_total':
-                    (line['line_total'] as num?)?.toDouble() ?? 0,
-              };
-
-              await client
-                  .from('return_lines')
-                  .insert(linePayload);
-            }
+          // Replace cloud return lines so Admin edits sync correctly.
+          await client.from('return_lines').delete().eq('return_id', cloudReturnId);
+          for (final line in localLines) {
+            final linePayload = <String, Object?>{
+              'return_id': cloudReturnId,
+              'inventory_client_uid': (line['inventory_client_uid'] ?? '').toString(),
+              'tile_name': (line['tile_name'] ?? '').toString(),
+              'quantity': (line['quantity'] as num?)?.toInt() ?? 0,
+              'unit_price': (line['unit_price'] as num?)?.toDouble() ?? 0,
+              'line_total': (line['line_total'] as num?)?.toDouble() ?? 0,
+            };
+            await client.from('return_lines').insert(linePayload);
           }
 
           await LocalDb.instance.markReturnSynced(
@@ -393,8 +411,35 @@ class SyncService {
           );
           returnsUploaded++;
         }
-      } catch (_) {
-        // Returns remain safely pending if the return cloud schema is unavailable.
+
+        // Pull cloud returns so returns created on another phone
+        // become visible on this phone after Sync Now.
+        final cloudReturns = await client
+            .from('returns')
+            .select('*')
+            .order('return_date');
+
+        for (final row in cloudReturns) {
+          final header = Map<String, dynamic>.from(row);
+          final cloudReturnId = (header['id'] as num?)?.toInt();
+          if (cloudReturnId == null) continue;
+
+          final lineRows = await client
+              .from('return_lines')
+              .select('*')
+              .eq('return_id', cloudReturnId);
+
+          final lines = lineRows
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+
+          await LocalDb.instance.upsertCloudReturn(
+            header,
+            lines,
+          );
+        }
+      } catch (e) {
+        return 'Returns sync error: $e';
       }
 
       final now =

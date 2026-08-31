@@ -15,17 +15,19 @@ class LocalDb {
     final path = join(await getDatabasesPath(), 'gokula_inventory.db');
     _db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await _createInventory(db);
         await _createSales(db);
         await _createMasters(db);
         await _createReturns(db);
+        await _createSyncDeletions(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) await _createSales(db);
         if (oldVersion < 3) await _createMasters(db);
         if (oldVersion < 4) await _createReturns(db);
+        if (oldVersion < 5) await _createSyncDeletions(db);
       },
     );
     return _db!;
@@ -135,6 +137,29 @@ class LocalDb {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_return_lines_sale_line_id ON return_lines(sale_line_id)',
     );
+  }
+
+
+  Future<void> _createSyncDeletions(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_deletions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(entity_type, entity_key)
+      )
+    ''');
+  }
+
+  Future<List<Map<String, Object?>>> pendingDeletions() async {
+    final db = await database;
+    return db.query('sync_deletions', orderBy: 'id');
+  }
+
+  Future<void> markDeletionSynced(int id) async {
+    final db = await database;
+    await db.delete('sync_deletions', where: 'id=?', whereArgs: [id]);
   }
 
 
@@ -271,7 +296,8 @@ class LocalDb {
     final inv = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM inventory WHERE sync_state='pending'")) ?? 0;
     final sales = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM sales WHERE sync_state='pending'")) ?? 0;
     final returns = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM returns WHERE sync_state='pending'")) ?? 0;
-    return inv + sales + returns;
+    final deletions = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM sync_deletions')) ?? 0;
+    return inv + sales + returns + deletions;
   }
 
   Future<void> markSynced(int id, int? cloudId, {String? imageUrl}) async {
@@ -613,6 +639,111 @@ class LocalDb {
     });
   }
 
+
+  Future<void> deleteSaleAdmin(int saleId) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final saleRows = await txn.query('sales', where: 'id=?', whereArgs: [saleId], limit: 1);
+      if (saleRows.isEmpty) return;
+      final invoiceNo = (saleRows.first['invoice_no'] ?? '').toString();
+      final saleLines = await txn.query('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
+      final returnedRows = await txn.rawQuery('''
+        SELECT sale_line_id, COALESCE(SUM(quantity), 0) AS returned_qty
+        FROM return_lines WHERE sale_id=? GROUP BY sale_line_id
+      ''', [saleId]);
+      final returnedByLine = <int, int>{
+        for (final r in returnedRows)
+          (r['sale_line_id'] as num).toInt(): (r['returned_qty'] as num).toInt(),
+      };
+      for (final line in saleLines) {
+        final lineId = (line['id'] as num).toInt();
+        final sold = (line['quantity'] as num).toInt();
+        final returned = returnedByLine[lineId] ?? 0;
+        final restore = sold - returned;
+        if (restore != 0) {
+          await txn.rawUpdate('''
+            UPDATE inventory SET stock=stock+?, sync_state='pending', updated_at=? WHERE id=?
+          ''', [restore, DateTime.now().toIso8601String(), line['inventory_id']]);
+        }
+      }
+      final linkedReturns = await txn.query('returns', columns: ['return_no'], where: 'sale_id=?', whereArgs: [saleId]);
+      for (final r in linkedReturns) {
+        await txn.insert('sync_deletions', {
+          'entity_type': 'return', 'entity_key': r['return_no'], 'created_at': DateTime.now().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await txn.insert('sync_deletions', {
+        'entity_type': 'sale', 'entity_key': invoiceNo, 'created_at': DateTime.now().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await txn.delete('return_lines', where: 'sale_id=?', whereArgs: [saleId]);
+      await txn.delete('returns', where: 'sale_id=?', whereArgs: [saleId]);
+      await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
+      await txn.delete('sales', where: 'id=?', whereArgs: [saleId]);
+    });
+  }
+
+  Future<void> updateReturnAdmin({
+    required int returnId,
+    required int quantity,
+    required double unitPrice,
+    required String reason,
+  }) async {
+    if (quantity <= 0 || unitPrice < 0) throw ArgumentError('Invalid return quantity or price');
+    final db = await database;
+    await db.transaction((txn) async {
+      final headers = await txn.query('returns', where: 'id=?', whereArgs: [returnId], limit: 1);
+      final lines = await txn.query('return_lines', where: 'return_id=?', whereArgs: [returnId], limit: 1);
+      if (headers.isEmpty || lines.isEmpty) throw StateError('Return not found');
+      final line = lines.first;
+      final oldQty = (line['quantity'] as num).toInt();
+      final saleLineId = (line['sale_line_id'] as num).toInt();
+      final inventoryId = (line['inventory_id'] as num).toInt();
+      final saleLineRows = await txn.query('sale_lines', columns: ['quantity'], where: 'id=?', whereArgs: [saleLineId], limit: 1);
+      if (saleLineRows.isEmpty) throw StateError('Original sale line not found');
+      final soldQty = (saleLineRows.first['quantity'] as num).toInt();
+      final otherReturned = Sqflite.firstIntValue(await txn.rawQuery(
+        'SELECT COALESCE(SUM(quantity),0) FROM return_lines WHERE sale_line_id=? AND return_id<>?',
+        [saleLineId, returnId],
+      )) ?? 0;
+      final maxQty = soldQty - otherReturned;
+      if (quantity > maxQty) throw StateError('Maximum return quantity is $maxQty box(es).');
+      final delta = quantity - oldQty;
+      if (delta != 0) {
+        await txn.rawUpdate('''
+          UPDATE inventory SET stock=stock+?, sync_state='pending', updated_at=? WHERE id=?
+        ''', [delta, DateTime.now().toIso8601String(), inventoryId]);
+      }
+      final total = quantity * unitPrice;
+      await txn.update('return_lines', {
+        'quantity': quantity, 'unit_price': unitPrice, 'line_total': total,
+      }, where: 'id=?', whereArgs: [line['id']]);
+      await txn.update('returns', {
+        'reason': reason.trim(), 'total_amount': total, 'sync_state': 'pending',
+      }, where: 'id=?', whereArgs: [returnId]);
+    });
+  }
+
+  Future<void> deleteReturnAdmin(int returnId) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final headers = await txn.query('returns', where: 'id=?', whereArgs: [returnId], limit: 1);
+      if (headers.isEmpty) return;
+      final returnNo = (headers.first['return_no'] ?? '').toString();
+      final lines = await txn.query('return_lines', where: 'return_id=?', whereArgs: [returnId]);
+      for (final line in lines) {
+        final qty = (line['quantity'] as num).toInt();
+        await txn.rawUpdate('''
+          UPDATE inventory SET stock=stock-?, sync_state='pending', updated_at=? WHERE id=?
+        ''', [qty, DateTime.now().toIso8601String(), line['inventory_id']]);
+      }
+      await txn.insert('sync_deletions', {
+        'entity_type': 'return', 'entity_key': returnNo, 'created_at': DateTime.now().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await txn.delete('return_lines', where: 'return_id=?', whereArgs: [returnId]);
+      await txn.delete('returns', where: 'id=?', whereArgs: [returnId]);
+    });
+  }
+
   Future<List<Sale>> sales() async {
     final db = await database;
     final rows = await db.query('sales', orderBy: 'created_at DESC');
@@ -878,7 +1009,9 @@ class LocalDb {
         r.reason,
         r.total_amount,
         r.sync_state,
-        COALESCE(SUM(rl.quantity), 0) AS total_boxes
+        COALESCE(SUM(rl.quantity), 0) AS total_boxes,
+        COALESCE(MAX(rl.quantity), 0) AS line_quantity,
+        COALESCE(MAX(rl.unit_price), 0) AS unit_price
       FROM returns r
       LEFT JOIN return_lines rl ON rl.return_id = r.id
       GROUP BY r.id

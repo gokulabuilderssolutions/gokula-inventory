@@ -29,6 +29,7 @@ class InventorySearchList extends StatefulWidget {
 class _InventorySearchListState extends State<InventorySearchList> {
   final TextEditingController _searchController = TextEditingController();
   String? _selectedDesign;
+  String _sortMode = 'design_az';
 
   @override
   void initState() {
@@ -78,10 +79,24 @@ class _InventorySearchListState extends State<InventorySearchList> {
 
   List<InventoryItem> get _visibleItems {
     final q = _searchController.text.trim().toLowerCase();
-    if (q.isEmpty) return widget.items;
-    return widget.items
-        .where((item) => item.tileName.toLowerCase().contains(q))
+    final list = (q.isEmpty
+            ? widget.items
+            : widget.items.where((item) => item.tileName.toLowerCase().contains(q)))
         .toList();
+    switch (_sortMode) {
+      case 'design_za':
+        list.sort((a, b) => b.tileName.toLowerCase().compareTo(a.tileName.toLowerCase()));
+        break;
+      case 'qty_low':
+        list.sort((a, b) => a.stock.compareTo(b.stock));
+        break;
+      case 'qty_high':
+        list.sort((a, b) => b.stock.compareTo(a.stock));
+        break;
+      default:
+        list.sort((a, b) => a.tileName.toLowerCase().compareTo(b.tileName.toLowerCase()));
+    }
+    return list;
   }
 
   void _selectDesign(String design) {
@@ -123,6 +138,25 @@ class _InventorySearchListState extends State<InventorySearchList> {
                     ),
             ),
           ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            value: _sortMode,
+            decoration: const InputDecoration(
+              labelText: 'Sort inventory',
+              prefixIcon: Icon(Icons.sort),
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(value: 'design_az', child: Text('Design A - Z')),
+              DropdownMenuItem(value: 'design_za', child: Text('Design Z - A')),
+              DropdownMenuItem(value: 'qty_low', child: Text('Quantity Low - High')),
+              DropdownMenuItem(value: 'qty_high', child: Text('Quantity High - Low')),
+            ],
+            onChanged: (value) {
+              if (value != null) setState(() => _sortMode = value);
+            },
+          ),
+          const SizedBox(height: 4),
           if (suggestions.isNotEmpty) ...[
             const SizedBox(height: 4),
             Container(

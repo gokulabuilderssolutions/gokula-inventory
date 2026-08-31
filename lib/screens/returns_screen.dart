@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../models/sale.dart';
 import '../services/local_db.dart';
+import '../services/auth_service.dart';
 
 class ReturnsScreen extends StatefulWidget {
   const ReturnsScreen({super.key});
@@ -28,11 +29,13 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
 
   bool _loading = true;
   bool _saving = false;
+  bool _isAdmin = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadPermissions();
     _searchController.addListener(_refreshSuggestions);
   }
 
@@ -49,6 +52,11 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
 
   void _refreshSuggestions() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _loadPermissions() async {
+    final admin = await AuthService().isAdmin();
+    if (mounted) setState(() => _isAdmin = admin);
   }
 
   Future<void> _load() async {
@@ -527,6 +535,62 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
     );
   }
 
+  Future<void> _editReturn(Map<String, Object?> row) async {
+    if (!_isAdmin) return;
+    final id = _asInt(row['id']);
+    final qty = TextEditingController(text: _asInt(row['line_quantity']).toString());
+    final price = TextEditingController(text: _asDouble(row['unit_price']).toStringAsFixed(2));
+    final reason = TextEditingController(text: (row['reason'] ?? '').toString());
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Edit ${(row['return_no'] ?? '').toString()}'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: qty, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Return quantity')),
+            TextField(controller: price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Return price')),
+            TextField(controller: reason, maxLines: 2, decoration: const InputDecoration(labelText: 'Reason')),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Update')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await LocalDb.instance.updateReturnAdmin(
+        returnId: id,
+        quantity: int.tryParse(qty.text.trim()) ?? 0,
+        unitPrice: double.tryParse(price.text.trim()) ?? -1,
+        reason: reason.text,
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) _showMessage('Could not update return: $e');
+    }
+  }
+
+  Future<void> _deleteReturn(Map<String, Object?> row) async {
+    if (!_isAdmin) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete return?'),
+        content: Text('Delete ${(row['return_no'] ?? '').toString()}? Returned stock will be reversed.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await LocalDb.instance.deleteReturnAdmin(_asInt(row['id']));
+      await _load();
+    }
+  }
+
   Widget _buildHistory() {
     return Card(
       child: Padding(
@@ -561,10 +625,21 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                     '${_formatDate((row['return_date'] ?? '').toString())}',
                   ),
                   isThreeLine: true,
-                  trailing: Text(
-                    '₹${_asDouble(row['total_amount']).toStringAsFixed(2)}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+                  trailing: _isAdmin
+                      ? PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'edit') _editReturn(row);
+                            if (value == 'delete') _deleteReturn(row);
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit), title: Text('Edit return'))),
+                            PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Delete return'))),
+                          ],
+                        )
+                      : Text(
+                          '₹${_asDouble(row['total_amount']).toStringAsFixed(2)}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
                 );
               }),
           ],

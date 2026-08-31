@@ -66,6 +66,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     String selectedSize = 'All Sizes';
     String selectedFinish = 'All Finishes';
+    final minQty = TextEditingController();
+    final maxQty = TextEditingController();
 
     final shouldExport = await showDialog<bool>(
       context: context,
@@ -135,6 +137,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     }
                   },
                 ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: minQty,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Minimum quantity',
+                          hintText: 'Example: 1',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextField(
+                        controller: maxQty,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Maximum quantity',
+                          hintText: 'Example: 100',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -160,7 +190,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
           selectedSize == 'All Sizes' || item.size.trim() == selectedSize;
       final finishMatches = selectedFinish == 'All Finishes' ||
           item.texture.trim() == selectedFinish;
-      return sizeMatches && finishMatches;
+      final min = int.tryParse(minQty.text.trim());
+      final max = int.tryParse(maxQty.text.trim());
+      final minMatches = min == null || item.stock >= min;
+      final maxMatches = max == null || item.stock <= max;
+      return sizeMatches && finishMatches && minMatches && maxMatches;
     }).toList();
 
     if (filteredItems.isEmpty) {
