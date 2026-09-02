@@ -214,6 +214,20 @@ class SyncService {
         final type = (deletion['entity_type'] ?? '').toString();
         final key = (deletion['entity_key'] ?? '').toString();
         final uid = (deletion['entity_uid'] ?? '').toString();
+
+        // Persist a deletion tombstone before deleting the cloud row. Every
+        // phone reads these tombstones, so old local copies cannot reappear.
+        await client.from('sync_tombstones').upsert(
+          {
+            'entity_type': type,
+            'entity_uid': uid.isEmpty ? null : uid,
+            'entity_key': key,
+            'deleted_at': DateTime.now().toUtc().toIso8601String(),
+            'created_by': client.auth.currentUser?.id,
+          },
+          onConflict: 'entity_type,entity_key',
+        );
+
         if (type == 'return') {
           final rows = uid.isNotEmpty
               ? await client.from('returns').select('id').eq('sync_uid', uid).limit(1)
@@ -231,6 +245,30 @@ class SyncService {
           }
         }
         await LocalDb.instance.markDeletionSynced(deletionId);
+      }
+
+      // Apply cloud deletions on every phone before any Sales/Returns upload
+      // or download. The display key fallback removes legacy v1.6.18 copies
+      // which may have different sync_uid values on different phones.
+      final tombstones = await client
+          .from('sync_tombstones')
+          .select('entity_type, entity_uid, entity_key');
+      for (final raw in tombstones) {
+        final tombstone = Map<String, dynamic>.from(raw);
+        final type = (tombstone['entity_type'] ?? '').toString();
+        final uid = (tombstone['entity_uid'] ?? '').toString();
+        final key = (tombstone['entity_key'] ?? '').toString();
+        if (type == 'sale') {
+          await LocalDb.instance.applyRemoteSaleDeletion(
+            syncUid: uid,
+            invoiceNo: key,
+          );
+        } else if (type == 'return') {
+          await LocalDb.instance.applyRemoteReturnDeletion(
+            syncUid: uid,
+            returnNo: key,
+          );
+        }
       }
 
       final cloudRows = await client.from('inventory').select('*');
@@ -311,46 +349,22 @@ class SyncService {
 
           final originalInvoiceNo =
               (sale['invoice_no'] ?? '').toString();
-          final localCreatedAt =
-              (sale['created_at'] ?? '').toString();
 
-          String candidateInvoiceNo = originalInvoiceNo;
-          var suffix = 0;
-
-          while (true) {
-            final existingInvoice = await client
-                .from('sales')
-                .select('invoice_no, created_at, sync_uid')
-                .eq('invoice_no', candidateInvoiceNo)
-                .limit(1);
-
-            if (existingInvoice.isEmpty) {
-              break;
-            }
-
-            final cloudCreatedAt =
-                (existingInvoice.first['created_at'] ?? '').toString();
-            final cloudSyncUid =
-                (existingInvoice.first['sync_uid'] ?? '').toString();
-
-            if (cloudSyncUid.isNotEmpty && cloudSyncUid == saleSyncUid) {
-              break;
-            }
-
-            if (cloudCreatedAt == localCreatedAt &&
-                localCreatedAt.isNotEmpty) {
-              if (cloudSyncUid.isNotEmpty && cloudSyncUid != saleSyncUid) {
-                await LocalDb.instance.adoptSaleSyncUid(localId, cloudSyncUid);
-                saleSyncUid = cloudSyncUid;
-                sale['sync_uid'] = cloudSyncUid;
-              }
-              break;
-            }
-
-            suffix++;
-            candidateInvoiceNo = '${originalInvoiceNo}_$suffix';
+          // Supabase is the single authority for final invoice numbering.
+          // The RPC is atomic and idempotent by sync_uid, so simultaneous
+          // offline phones receive different sequential numbers.
+          final allocatedInvoice = await client.rpc(
+            'allocate_document_number',
+            params: {
+              'p_kind': 'sale',
+              'p_sync_uid': saleSyncUid,
+              'p_created_at': (sale['created_at'] ?? '').toString(),
+            },
+          );
+          final candidateInvoiceNo = allocatedInvoice.toString();
+          if (candidateInvoiceNo.isEmpty) {
+            throw StateError('Supabase did not allocate an invoice number.');
           }
-
           if (candidateInvoiceNo != originalInvoiceNo) {
             await LocalDb.instance.renameSaleInvoiceForSync(
               localId,
@@ -410,34 +424,22 @@ class SyncService {
               await LocalDb.instance.ensureSaleSyncUid(localSaleId);
           final originalReturnNo =
               (localHeader['return_no'] ?? '').toString();
-          final localReturnDate =
-              (localHeader['return_date'] ?? '').toString();
           final localInvoiceNo =
               (localHeader['invoice_no'] ?? '').toString();
 
-          String returnNo = originalReturnNo;
-          var returnSuffix = 0;
-          while (true) {
-            final collision = await client
-                .from('returns')
-                .select('id, sync_uid, sale_invoice_no, return_date')
-                .eq('return_no', returnNo)
-                .limit(1);
-            if (collision.isEmpty) break;
-            final cloudUid = (collision.first['sync_uid'] ?? '').toString();
-            final cloudInvoice =
-                (collision.first['sale_invoice_no'] ?? '').toString();
-            final cloudDate = (collision.first['return_date'] ?? '').toString();
-            if (cloudUid == returnSyncUid ||
-                (cloudInvoice == localInvoiceNo &&
-                    cloudDate == localReturnDate &&
-                    localReturnDate.isNotEmpty)) {
-              break;
-            }
-            returnSuffix++;
-            returnNo = '${originalReturnNo}_$returnSuffix';
+          // Final return number is also allocated centrally during sync.
+          final allocatedReturn = await client.rpc(
+            'allocate_document_number',
+            params: {
+              'p_kind': 'return',
+              'p_sync_uid': returnSyncUid,
+              'p_created_at': (localHeader['return_date'] ?? '').toString(),
+            },
+          );
+          final returnNo = allocatedReturn.toString();
+          if (returnNo.isEmpty) {
+            throw StateError('Supabase did not allocate a return number.');
           }
-
           if (returnNo != originalReturnNo) {
             await LocalDb.instance.renameReturnNoForSync(
               localReturnId,

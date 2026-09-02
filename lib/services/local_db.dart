@@ -204,6 +204,103 @@ class LocalDb {
     await db.delete('sync_deletions', where: 'id=?', whereArgs: [id]);
   }
 
+  Future<bool> hasLocalSaleDeletionTarget({
+    required String syncUid,
+    required String invoiceNo,
+  }) async {
+    final db = await database;
+    if (syncUid.isNotEmpty) {
+      final byUid = await db.query(
+        'sales',
+        columns: ['id'],
+        where: 'sync_uid=?',
+        whereArgs: [syncUid],
+        limit: 1,
+      );
+      if (byUid.isNotEmpty) return true;
+    }
+    if (invoiceNo.isEmpty) return false;
+    final byInvoice = await db.query(
+      'sales',
+      columns: ['id'],
+      where: 'invoice_no=?',
+      whereArgs: [invoiceNo],
+      limit: 1,
+    );
+    return byInvoice.isNotEmpty;
+  }
+
+  Future<void> applyRemoteSaleDeletion({
+    required String syncUid,
+    required String invoiceNo,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      List<Map<String, Object?>> rows = [];
+      if (syncUid.isNotEmpty) {
+        rows = await txn.query(
+          'sales',
+          columns: ['id'],
+          where: 'sync_uid=?',
+          whereArgs: [syncUid],
+        );
+      }
+      if (invoiceNo.isNotEmpty) {
+        final byInvoice = await txn.query(
+          'sales',
+          columns: ['id'],
+          where: 'invoice_no=?',
+          whereArgs: [invoiceNo],
+        );
+        final ids = <int>{
+          ...rows.map((e) => (e['id'] as num).toInt()),
+          ...byInvoice.map((e) => (e['id'] as num).toInt()),
+        };
+        rows = ids.map((id) => <String, Object?>{'id': id}).toList();
+      }
+
+      for (final row in rows) {
+        final saleId = (row['id'] as num).toInt();
+        await txn.delete('return_lines', where: 'sale_id=?', whereArgs: [saleId]);
+        await txn.delete('returns', where: 'sale_id=?', whereArgs: [saleId]);
+        await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
+        await txn.delete('sales', where: 'id=?', whereArgs: [saleId]);
+      }
+    });
+  }
+
+  Future<void> applyRemoteReturnDeletion({
+    required String syncUid,
+    required String returnNo,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final ids = <int>{};
+      if (syncUid.isNotEmpty) {
+        final rows = await txn.query(
+          'returns',
+          columns: ['id'],
+          where: 'sync_uid=?',
+          whereArgs: [syncUid],
+        );
+        ids.addAll(rows.map((e) => (e['id'] as num).toInt()));
+      }
+      if (returnNo.isNotEmpty) {
+        final rows = await txn.query(
+          'returns',
+          columns: ['id'],
+          where: 'return_no=?',
+          whereArgs: [returnNo],
+        );
+        ids.addAll(rows.map((e) => (e['id'] as num).toInt()));
+      }
+      for (final returnId in ids) {
+        await txn.delete('return_lines', where: 'return_id=?', whereArgs: [returnId]);
+        await txn.delete('returns', where: 'id=?', whereArgs: [returnId]);
+      }
+    });
+  }
+
   Future<void> ensureLegacySyncColumns() async {
     final db = await database;
     await _upgradeToV6(db);
@@ -669,7 +766,10 @@ class LocalDb {
       }
       final saleId = await txn.insert('sales', {
         'sync_uid': sale.syncUid.isNotEmpty ? sale.syncUid : _newSyncUid('sale'),
-        'invoice_no': sale.invoiceNo,
+        // Final invoice number is allocated by Supabase during first sync.
+        'invoice_no': sale.invoiceNo.startsWith('PENDING-SALE-')
+            ? sale.invoiceNo
+            : 'PENDING-SALE-${DateTime.now().microsecondsSinceEpoch}',
         'customer_id': sale.customerId,
         'customer_name': sale.customerName,
         'subtotal': sale.subtotal,
@@ -1155,7 +1255,7 @@ class LocalDb {
         throw StateError('Inventory item could not be found.');
       }
 
-      final returnNo = await _nextReturnNoTxn(txn);
+      final returnNo = 'PENDING-RETURN-${DateTime.now().microsecondsSinceEpoch}';
       final total = quantity * unitPrice;
       final now = DateTime.now().toIso8601String();
       final saleSyncUid = (saleRows.first['sync_uid'] ?? '').toString();
@@ -1196,7 +1296,7 @@ class LocalDb {
       return returnId;
     });
   }
-
+  // ignore: unused_element
   Future<String> _nextReturnNoTxn(Transaction txn) async {
     final count =
         Sqflite.firstIntValue(await txn.rawQuery('SELECT COUNT(*) FROM returns')) ??
