@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/customer.dart';
@@ -15,7 +17,7 @@ class LocalDb {
     final path = join(await getDatabasesPath(), 'gokula_inventory.db');
     _db = await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await _createInventory(db);
         await _createSales(db);
@@ -28,9 +30,39 @@ class LocalDb {
         if (oldVersion < 3) await _createMasters(db);
         if (oldVersion < 4) await _createReturns(db);
         if (oldVersion < 5) await _createSyncDeletions(db);
+        if (oldVersion < 6) await _upgradeToV6(db);
       },
     );
     return _db!;
+  }
+
+  String _newSyncUid(String prefix) {
+    final random = Random.secure();
+    final a = random.nextInt(0x7fffffff).toRadixString(16).padLeft(8, '0');
+    final b = random.nextInt(0x7fffffff).toRadixString(16).padLeft(8, '0');
+    return '$prefix-${DateTime.now().microsecondsSinceEpoch}-$a$b';
+  }
+
+  Future<void> _upgradeToV6(Database db) async {
+    Future<void> addColumn(String sql) async {
+      try {
+        await db.execute(sql);
+      } catch (_) {
+        // Column already exists on a partially upgraded database.
+      }
+    }
+
+    await addColumn("ALTER TABLE sales ADD COLUMN sync_uid TEXT NOT NULL DEFAULT ''");
+    await addColumn("ALTER TABLE returns ADD COLUMN sync_uid TEXT NOT NULL DEFAULT ''");
+    await addColumn("ALTER TABLE returns ADD COLUMN sale_sync_uid TEXT NOT NULL DEFAULT ''");
+    await addColumn("ALTER TABLE sync_deletions ADD COLUMN entity_uid TEXT NOT NULL DEFAULT ''");
+
+    await db.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_sync_uid ON sales(sync_uid) WHERE sync_uid <> ''",
+    );
+    await db.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_returns_sync_uid ON returns(sync_uid) WHERE sync_uid <> ''",
+    );
   }
 
   Future<void> _createInventory(Database db) async {
@@ -68,6 +100,7 @@ class LocalDb {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS sales(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sync_uid TEXT NOT NULL DEFAULT '',
         invoice_no TEXT NOT NULL UNIQUE,
         customer_id INTEGER,
         customer_name TEXT NOT NULL,
@@ -100,6 +133,8 @@ class LocalDb {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS returns(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sync_uid TEXT NOT NULL DEFAULT '',
+        sale_sync_uid TEXT NOT NULL DEFAULT '',
         return_no TEXT NOT NULL UNIQUE,
         sale_id INTEGER NOT NULL,
         invoice_no TEXT NOT NULL,
@@ -146,10 +181,17 @@ class LocalDb {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         entity_type TEXT NOT NULL,
         entity_key TEXT NOT NULL,
+        entity_uid TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         UNIQUE(entity_type, entity_key)
       )
     ''');
+    await db.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_sync_uid ON sales(sync_uid) WHERE sync_uid <> ''",
+    );
+    await db.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_returns_sync_uid ON returns(sync_uid) WHERE sync_uid <> ''",
+    );
   }
 
   Future<List<Map<String, Object?>>> pendingDeletions() async {
@@ -160,6 +202,11 @@ class LocalDb {
   Future<void> markDeletionSynced(int id) async {
     final db = await database;
     await db.delete('sync_deletions', where: 'id=?', whereArgs: [id]);
+  }
+
+  Future<void> ensureLegacySyncColumns() async {
+    final db = await database;
+    await _upgradeToV6(db);
   }
 
 
@@ -349,23 +396,78 @@ class LocalDb {
     return rows.isEmpty ? null : InventoryItem.fromMap(rows.first);
   }
 
-  Future<void> upsertCloudSale(Map<String, dynamic> cloud) async {
+  Future<bool> upsertCloudSale(Map<String, dynamic> cloud) async {
     final db = await database;
-    await db.transaction((txn) async {
+    return db.transaction((txn) async {
       final invoiceNo = (cloud['invoice_no'] ?? '').toString();
-      if (invoiceNo.isEmpty) return;
-      final existing = await txn.query('sales', where: 'invoice_no=?', whereArgs: [invoiceNo], limit: 1);
-      if (existing.isNotEmpty && (existing.first['sync_state'] ?? '') == 'pending') return;
+      final cloudUid = (cloud['sync_uid'] ?? '').toString();
+      if (invoiceNo.isEmpty) return false;
 
-      final customerName = (cloud['customer_name'] ?? 'Walk-in Customer').toString();
+      List<Map<String, Object?>> existing = [];
+      if (cloudUid.isNotEmpty) {
+        existing = await txn.query(
+          'sales',
+          where: 'sync_uid=?',
+          whereArgs: [cloudUid],
+          limit: 1,
+        );
+      }
+
+      // Legacy v1.6.18 records do not have a UID. Adopt the cloud UID instead
+      // of creating a second copy of the same historical invoice.
+      if (existing.isEmpty) {
+        final legacy = await txn.query(
+          'sales',
+          where: 'invoice_no=?',
+          whereArgs: [invoiceNo],
+          limit: 1,
+        );
+        if (legacy.isNotEmpty) {
+          final localUid = (legacy.first['sync_uid'] ?? '').toString();
+          final isPending = (legacy.first['sync_state'] ?? '') == 'pending';
+          if (localUid.isEmpty || localUid == cloudUid) {
+            existing = legacy;
+            if (cloudUid.isNotEmpty && localUid.isEmpty) {
+              await txn.update(
+                'sales',
+                {'sync_uid': cloudUid},
+                where: 'id=?',
+                whereArgs: [legacy.first['id']],
+              );
+            }
+          } else if (isPending) {
+            return false;
+          }
+        }
+      }
+
+      if (existing.isNotEmpty &&
+          (existing.first['sync_state'] ?? '') == 'pending') {
+        return false;
+      }
+
+      final customerName =
+          (cloud['customer_name'] ?? 'Walk-in Customer').toString();
       int? customerId;
       if (customerName.isNotEmpty && customerName != 'Walk-in Customer') {
-        final customerRows = await txn.query('customers', where: 'name=?', whereArgs: [customerName], limit: 1);
+        final customerRows = await txn.query(
+          'customers',
+          where: 'name=?',
+          whereArgs: [customerName],
+          limit: 1,
+        );
         customerId = customerRows.isEmpty
-            ? await txn.insert('customers', {'name': customerName, 'phone': '', 'address': '', 'gstin': ''})
+            ? await txn.insert('customers', {
+                'name': customerName,
+                'phone': '',
+                'address': '',
+                'gstin': '',
+              })
             : customerRows.first['id'] as int?;
       }
-      final values = {
+
+      final values = <String, Object?>{
+        'sync_uid': cloudUid,
         'invoice_no': invoiceNo,
         'customer_id': customerId,
         'customer_name': customerName,
@@ -374,9 +476,11 @@ class LocalDb {
         'gst_amount': (cloud['gst_amount'] as num?)?.toDouble() ?? 0,
         'grand_total': (cloud['grand_total'] as num?)?.toDouble() ?? 0,
         'payment_mode': (cloud['payment_mode'] ?? 'Cash').toString(),
-        'created_at': (cloud['created_at'] ?? DateTime.now().toIso8601String()).toString(),
+        'created_at':
+            (cloud['created_at'] ?? DateTime.now().toIso8601String()).toString(),
         'sync_state': 'synced',
       };
+
       int saleId;
       if (existing.isEmpty) {
         saleId = await txn.insert('sales', values);
@@ -385,6 +489,7 @@ class LocalDb {
         await txn.update('sales', values, where: 'id=?', whereArgs: [saleId]);
         await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
       }
+
       final rawLines = cloud['lines'];
       if (rawLines is List) {
         for (final raw in rawLines) {
@@ -393,11 +498,21 @@ class LocalDb {
           int? inventoryId;
           final uid = (line['inventory_client_uid'] ?? '').toString();
           if (uid.isNotEmpty) {
-            final inv = await txn.query('inventory', where: 'client_uid=?', whereArgs: [uid], limit: 1);
+            final inv = await txn.query(
+              'inventory',
+              where: 'client_uid=?',
+              whereArgs: [uid],
+              limit: 1,
+            );
             if (inv.isNotEmpty) inventoryId = inv.first['id'] as int?;
           }
           if (inventoryId == null) {
-            final inv = await txn.query('inventory', where: 'tile_name=? AND deleted=0', whereArgs: [(line['tile_name'] ?? '').toString()], limit: 1);
+            final inv = await txn.query(
+              'inventory',
+              where: 'tile_name=? AND deleted=0',
+              whereArgs: [(line['tile_name'] ?? '').toString()],
+              limit: 1,
+            );
             if (inv.isNotEmpty) inventoryId = inv.first['id'] as int?;
           }
           if (inventoryId == null) continue;
@@ -411,6 +526,7 @@ class LocalDb {
           });
         }
       }
+      return true;
     });
   }
 
@@ -552,6 +668,7 @@ class LocalDb {
         if (line.quantity <= 0 || line.quantity > stock) throw StateError('Insufficient stock for ${line.tileName}. Available: $stock');
       }
       final saleId = await txn.insert('sales', {
+        'sync_uid': sale.syncUid.isNotEmpty ? sale.syncUid : _newSyncUid('sale'),
         'invoice_no': sale.invoiceNo,
         'customer_id': sale.customerId,
         'customer_name': sale.customerName,
@@ -646,6 +763,7 @@ class LocalDb {
       final saleRows = await txn.query('sales', where: 'id=?', whereArgs: [saleId], limit: 1);
       if (saleRows.isEmpty) return;
       final invoiceNo = (saleRows.first['invoice_no'] ?? '').toString();
+      final saleSyncUid = (saleRows.first['sync_uid'] ?? '').toString();
       final saleLines = await txn.query('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
       final returnedRows = await txn.rawQuery('''
         SELECT sale_line_id, COALESCE(SUM(quantity), 0) AS returned_qty
@@ -666,14 +784,14 @@ class LocalDb {
           ''', [restore, DateTime.now().toIso8601String(), line['inventory_id']]);
         }
       }
-      final linkedReturns = await txn.query('returns', columns: ['return_no'], where: 'sale_id=?', whereArgs: [saleId]);
+      final linkedReturns = await txn.query('returns', columns: ['return_no', 'sync_uid'], where: 'sale_id=?', whereArgs: [saleId]);
       for (final r in linkedReturns) {
         await txn.insert('sync_deletions', {
-          'entity_type': 'return', 'entity_key': r['return_no'], 'created_at': DateTime.now().toIso8601String(),
+          'entity_type': 'return', 'entity_key': r['return_no'], 'entity_uid': r['sync_uid'] ?? '', 'created_at': DateTime.now().toIso8601String(),
         }, conflictAlgorithm: ConflictAlgorithm.ignore);
       }
       await txn.insert('sync_deletions', {
-        'entity_type': 'sale', 'entity_key': invoiceNo, 'created_at': DateTime.now().toIso8601String(),
+        'entity_type': 'sale', 'entity_key': invoiceNo, 'entity_uid': saleSyncUid, 'created_at': DateTime.now().toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await txn.delete('return_lines', where: 'sale_id=?', whereArgs: [saleId]);
       await txn.delete('returns', where: 'sale_id=?', whereArgs: [saleId]);
@@ -729,6 +847,7 @@ class LocalDb {
       final headers = await txn.query('returns', where: 'id=?', whereArgs: [returnId], limit: 1);
       if (headers.isEmpty) return;
       final returnNo = (headers.first['return_no'] ?? '').toString();
+      final returnSyncUid = (headers.first['sync_uid'] ?? '').toString();
       final lines = await txn.query('return_lines', where: 'return_id=?', whereArgs: [returnId]);
       for (final line in lines) {
         final qty = (line['quantity'] as num).toInt();
@@ -737,7 +856,7 @@ class LocalDb {
         ''', [qty, DateTime.now().toIso8601String(), line['inventory_id']]);
       }
       await txn.insert('sync_deletions', {
-        'entity_type': 'return', 'entity_key': returnNo, 'created_at': DateTime.now().toIso8601String(),
+        'entity_type': 'return', 'entity_key': returnNo, 'entity_uid': returnSyncUid, 'created_at': DateTime.now().toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await txn.delete('return_lines', where: 'return_id=?', whereArgs: [returnId]);
       await txn.delete('returns', where: 'id=?', whereArgs: [returnId]);
@@ -822,6 +941,83 @@ class LocalDb {
     });
   }
 
+  Future<String> ensureSaleSyncUid(int saleId) async {
+    final db = await database;
+    final rows = await db.query(
+      'sales',
+      columns: ['sync_uid'],
+      where: 'id=?',
+      whereArgs: [saleId],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('Sale not found.');
+    var uid = (rows.first['sync_uid'] ?? '').toString();
+    if (uid.isEmpty) {
+      uid = _newSyncUid('sale');
+      await db.update(
+        'sales',
+        {'sync_uid': uid},
+        where: 'id=?',
+        whereArgs: [saleId],
+      );
+      await db.update(
+        'returns',
+        {'sale_sync_uid': uid},
+        where: 'sale_id=? AND (sale_sync_uid IS NULL OR sale_sync_uid=\'\')',
+        whereArgs: [saleId],
+      );
+    }
+    return uid;
+  }
+
+  Future<void> adoptSaleSyncUid(int saleId, String syncUid) async {
+    if (syncUid.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.update(
+        'sales',
+        {'sync_uid': syncUid},
+        where: 'id=?',
+        whereArgs: [saleId],
+      );
+      await txn.update(
+        'returns',
+        {'sale_sync_uid': syncUid},
+        where: 'sale_id=?',
+        whereArgs: [saleId],
+      );
+    });
+  }
+
+  Future<void> pruneSyncedSales(Set<String> cloudUids) async {
+    final db = await database;
+    final rows = await db.query(
+      'sales',
+      columns: ['id', 'sync_uid'],
+      where: "sync_state='synced' AND sync_uid<>''",
+    );
+    for (final row in rows) {
+      final uid = (row['sync_uid'] ?? '').toString();
+      if (uid.isNotEmpty && !cloudUids.contains(uid)) {
+        final saleId = (row['id'] as num).toInt();
+        final pendingReturns = Sqflite.firstIntValue(
+              await db.rawQuery(
+                "SELECT COUNT(*) FROM returns WHERE sale_id=? AND sync_state='pending'",
+                [saleId],
+              ),
+            ) ??
+            0;
+        if (pendingReturns > 0) continue;
+        await db.transaction((txn) async {
+          await txn.delete('return_lines', where: 'sale_id=?', whereArgs: [saleId]);
+          await txn.delete('returns', where: 'sale_id=? AND sync_state=\'synced\'', whereArgs: [saleId]);
+          await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
+          await txn.delete('sales', where: 'id=?', whereArgs: [saleId]);
+        });
+      }
+    }
+  }
+
   Future<List<Map<String, Object?>>> pendingSalesWithLines() async {
     final db = await database;
     final sales = await db.query('sales', where: "sync_state='pending'", orderBy: 'id');
@@ -836,6 +1032,17 @@ class LocalDb {
   Future<void> markSaleSynced(int id) async {
     final db = await database;
     await db.update('sales', {'sync_state': 'synced'}, where: 'id=?', whereArgs: [id]);
+  }
+
+  Future<void> adoptReturnSyncUid(int returnId, String syncUid) async {
+    if (syncUid.isEmpty) return;
+    final db = await database;
+    await db.update(
+      'returns',
+      {'sync_uid': syncUid},
+      where: 'id=?',
+      whereArgs: [returnId],
+    );
   }
 
 
@@ -951,8 +1158,11 @@ class LocalDb {
       final returnNo = await _nextReturnNoTxn(txn);
       final total = quantity * unitPrice;
       final now = DateTime.now().toIso8601String();
+      final saleSyncUid = (saleRows.first['sync_uid'] ?? '').toString();
 
       final returnId = await txn.insert('returns', {
+        'sync_uid': _newSyncUid('return'),
+        'sale_sync_uid': saleSyncUid,
         'return_no': returnNo,
         'sale_id': saleId,
         'invoice_no': invoiceNo,
@@ -1064,47 +1274,91 @@ class LocalDb {
   }
 
 
-  Future<void> upsertCloudReturn(
+  Future<bool> upsertCloudReturn(
     Map<String, dynamic> header,
     List<Map<String, dynamic>> cloudLines,
   ) async {
     final db = await database;
 
-    await db.transaction((txn) async {
+    return db.transaction((txn) async {
       final returnNo = (header['return_no'] ?? '').toString();
+      final returnSyncUid = (header['sync_uid'] ?? '').toString();
+      final saleSyncUid = (header['sale_sync_uid'] ?? '').toString();
       final invoiceNo =
           (header['sale_invoice_no'] ?? header['invoice_no'] ?? '').toString();
 
-      if (returnNo.isEmpty || invoiceNo.isEmpty) return;
+      if (returnNo.isEmpty || invoiceNo.isEmpty) return false;
 
-      final saleRows = await txn.query(
-        'sales',
-        where: 'invoice_no=?',
-        whereArgs: [invoiceNo],
-        limit: 1,
-      );
+      List<Map<String, Object?>> saleRows = [];
+      if (saleSyncUid.isNotEmpty) {
+        saleRows = await txn.query(
+          'sales',
+          where: 'sync_uid=?',
+          whereArgs: [saleSyncUid],
+          limit: 1,
+        );
+      }
+      if (saleRows.isEmpty) {
+        saleRows = await txn.query(
+          'sales',
+          where: 'invoice_no=?',
+          whereArgs: [invoiceNo],
+          limit: 1,
+        );
+      }
 
-      if (saleRows.isEmpty) return;
+      if (saleRows.isEmpty) return false;
 
       final saleId = saleRows.first['id'] as int;
+      final resolvedSaleSyncUid =
+          (saleRows.first['sync_uid'] ?? saleSyncUid).toString();
       final customerId = saleRows.first['customer_id'] as int?;
       final customerName =
           (header['customer_name'] ?? saleRows.first['customer_name'] ?? '')
               .toString();
 
-      final existing = await txn.query(
-        'returns',
-        where: 'return_no=?',
-        whereArgs: [returnNo],
-        limit: 1,
-      );
+      List<Map<String, Object?>> existing = [];
+      if (returnSyncUid.isNotEmpty) {
+        existing = await txn.query(
+          'returns',
+          where: 'sync_uid=?',
+          whereArgs: [returnSyncUid],
+          limit: 1,
+        );
+      }
+      if (existing.isEmpty) {
+        final legacy = await txn.query(
+          'returns',
+          where: 'return_no=?',
+          whereArgs: [returnNo],
+          limit: 1,
+        );
+        if (legacy.isNotEmpty) {
+          final localUid = (legacy.first['sync_uid'] ?? '').toString();
+          if (localUid.isEmpty || localUid == returnSyncUid) {
+            existing = legacy;
+            if (returnSyncUid.isNotEmpty && localUid.isEmpty) {
+              await txn.update(
+                'returns',
+                {'sync_uid': returnSyncUid},
+                where: 'id=?',
+                whereArgs: [legacy.first['id']],
+              );
+            }
+          } else if ((legacy.first['sync_state'] ?? '') == 'pending') {
+            return false;
+          }
+        }
+      }
 
       if (existing.isNotEmpty &&
           (existing.first['sync_state'] ?? '') == 'pending') {
-        return;
+        return false;
       }
 
       final values = <String, Object?>{
+        'sync_uid': returnSyncUid,
+        'sale_sync_uid': resolvedSaleSyncUid,
         'return_no': returnNo,
         'sale_id': saleId,
         'invoice_no': invoiceNo,
@@ -1193,7 +1447,72 @@ class LocalDb {
           'line_total': (line['line_total'] as num?)?.toDouble() ?? 0,
         });
       }
+      return true;
     });
+  }
+
+  Future<String> ensureReturnSyncUid(int returnId) async {
+    final db = await database;
+    final rows = await db.query(
+      'returns',
+      columns: ['sync_uid', 'sale_id', 'sale_sync_uid'],
+      where: 'id=?',
+      whereArgs: [returnId],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('Return not found.');
+    var uid = (rows.first['sync_uid'] ?? '').toString();
+    var saleUid = (rows.first['sale_sync_uid'] ?? '').toString();
+    if (saleUid.isEmpty) {
+      saleUid = await ensureSaleSyncUid((rows.first['sale_id'] as num).toInt());
+    }
+    if (uid.isEmpty) uid = _newSyncUid('return');
+    await db.update(
+      'returns',
+      {'sync_uid': uid, 'sale_sync_uid': saleUid},
+      where: 'id=?',
+      whereArgs: [returnId],
+    );
+    return uid;
+  }
+
+  Future<void> renameReturnNoForSync(int returnId, String newReturnNo) async {
+    final db = await database;
+    final duplicate = await db.query(
+      'returns',
+      columns: ['id'],
+      where: 'return_no=? AND id<>?',
+      whereArgs: [newReturnNo, returnId],
+      limit: 1,
+    );
+    if (duplicate.isNotEmpty) {
+      throw StateError('Return $newReturnNo already exists on this phone.');
+    }
+    await db.update(
+      'returns',
+      {'return_no': newReturnNo, 'sync_state': 'pending'},
+      where: 'id=?',
+      whereArgs: [returnId],
+    );
+  }
+
+  Future<void> pruneSyncedReturns(Set<String> cloudUids) async {
+    final db = await database;
+    final rows = await db.query(
+      'returns',
+      columns: ['id', 'sync_uid'],
+      where: "sync_state='synced' AND sync_uid<>''",
+    );
+    for (final row in rows) {
+      final uid = (row['sync_uid'] ?? '').toString();
+      if (uid.isNotEmpty && !cloudUids.contains(uid)) {
+        final returnId = (row['id'] as num).toInt();
+        await db.transaction((txn) async {
+          await txn.delete('return_lines', where: 'return_id=?', whereArgs: [returnId]);
+          await txn.delete('returns', where: 'id=?', whereArgs: [returnId]);
+        });
+      }
+    }
   }
 
   Future<void> markReturnSynced(int id) async {

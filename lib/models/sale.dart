@@ -1,5 +1,6 @@
 class Sale {
   final int? id;
+  final String syncUid;
   final String invoiceNo;
   final int? customerId;
   final String customerName;
@@ -13,6 +14,7 @@ class Sale {
 
   const Sale({
     this.id,
+    this.syncUid = '',
     required this.invoiceNo,
     this.customerId,
     required this.customerName,
@@ -27,6 +29,7 @@ class Sale {
 
   factory Sale.fromMap(Map<String, Object?> map) => Sale(
         id: map['id'] as int?,
+        syncUid: (map['sync_uid'] ?? '').toString(),
         invoiceNo: (map['invoice_no'] ?? '') as String,
         customerId: map['customer_id'] as int?,
         customerName: (map['customer_name'] ?? 'Walk-in Customer') as String,

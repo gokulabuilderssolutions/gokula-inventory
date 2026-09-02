@@ -17,6 +17,7 @@ class SyncService {
   final _status = StreamController<bool>.broadcast();
   StreamSubscription<List<ConnectivityResult>>? _subscription;
   bool _syncing = false;
+  DateTime? _syncStartedAt;
 
   Stream<bool> get onlineStream => _status.stream;
 
@@ -49,9 +50,29 @@ class SyncService {
   }
 
   Future<String> syncNow() async {
-    if (_syncing) return 'Sync already running';
+    final now = DateTime.now();
+    if (_syncing) {
+      final started = _syncStartedAt;
+      if (started != null && now.difference(started) > const Duration(minutes: 2)) {
+        _syncing = false;
+        _syncStartedAt = null;
+      } else {
+        return 'Sync already running';
+      }
+    }
     _syncing = true;
+    _syncStartedAt = now;
+    try {
+      return await _runSync().timeout(const Duration(minutes: 2));
+    } on TimeoutException {
+      return 'Sync timed out. Please check internet and try Sync Now again.';
+    } finally {
+      _syncing = false;
+      _syncStartedAt = null;
+    }
+  }
 
+  Future<String> _runSync() async {
     try {
       if (!await isOnline()) {
         _status.add(false);
@@ -61,10 +82,14 @@ class SyncService {
       _status.add(true);
       final client = Supabase.instance.client;
       final isAdmin = await AuthService().isAdmin();
+      await LocalDb.instance.ensureLegacySyncColumns();
 
       var inventoryUploaded = 0;
       var salesUploaded = 0;
       var returnsUploaded = 0;
+      var inventoryDownloaded = 0;
+      var salesDownloaded = 0;
+      var returnsDownloaded = 0;
 
       final pendingInventory = await LocalDb.instance.pendingInventory();
 
@@ -188,15 +213,22 @@ class SyncService {
         final deletionId = (deletion['id'] as num).toInt();
         final type = (deletion['entity_type'] ?? '').toString();
         final key = (deletion['entity_key'] ?? '').toString();
+        final uid = (deletion['entity_uid'] ?? '').toString();
         if (type == 'return') {
-          final rows = await client.from('returns').select('id').eq('return_no', key).limit(1);
+          final rows = uid.isNotEmpty
+              ? await client.from('returns').select('id').eq('sync_uid', uid).limit(1)
+              : await client.from('returns').select('id').eq('return_no', key).limit(1);
           if (rows.isNotEmpty) {
             final returnId = (rows.first['id'] as num).toInt();
             await client.from('return_lines').delete().eq('return_id', returnId);
             await client.from('returns').delete().eq('id', returnId);
           }
         } else if (type == 'sale') {
-          await client.from('sales').delete().eq('invoice_no', key);
+          if (uid.isNotEmpty) {
+            await client.from('sales').delete().eq('sync_uid', uid);
+          } else {
+            await client.from('sales').delete().eq('invoice_no', key);
+          }
         }
         await LocalDb.instance.markDeletionSynced(deletionId);
       }
@@ -225,6 +257,7 @@ class SyncService {
           cloud,
           cachedLocalImage: cachedPath,
         );
+        inventoryDownloaded++;
       }
 
       try {
@@ -241,7 +274,12 @@ class SyncService {
               )
               .toList();
 
-          final localId = sale['id'] as int;
+          final localId = (sale['id'] as num).toInt();
+          var saleSyncUid = (sale['sync_uid'] ?? '').toString();
+          if (saleSyncUid.isEmpty) {
+            saleSyncUid = await LocalDb.instance.ensureSaleSyncUid(localId);
+            sale['sync_uid'] = saleSyncUid;
+          }
           sale.remove('id');
           sale.remove('sync_state');
           sale.remove('customer_id');
@@ -282,7 +320,7 @@ class SyncService {
           while (true) {
             final existingInvoice = await client
                 .from('sales')
-                .select('invoice_no, created_at')
+                .select('invoice_no, created_at, sync_uid')
                 .eq('invoice_no', candidateInvoiceNo)
                 .limit(1);
 
@@ -292,9 +330,20 @@ class SyncService {
 
             final cloudCreatedAt =
                 (existingInvoice.first['created_at'] ?? '').toString();
+            final cloudSyncUid =
+                (existingInvoice.first['sync_uid'] ?? '').toString();
+
+            if (cloudSyncUid.isNotEmpty && cloudSyncUid == saleSyncUid) {
+              break;
+            }
 
             if (cloudCreatedAt == localCreatedAt &&
                 localCreatedAt.isNotEmpty) {
+              if (cloudSyncUid.isNotEmpty && cloudSyncUid != saleSyncUid) {
+                await LocalDb.instance.adoptSaleSyncUid(localId, cloudSyncUid);
+                saleSyncUid = cloudSyncUid;
+                sale['sync_uid'] = cloudSyncUid;
+              }
               break;
             }
 
@@ -312,7 +361,7 @@ class SyncService {
 
           await client
               .from('sales')
-              .upsert(sale, onConflict: 'invoice_no');
+              .upsert(sale, onConflict: 'sync_uid');
 
           await LocalDb.instance.markSaleSynced(localId);
           salesUploaded++;
@@ -323,11 +372,15 @@ class SyncService {
             .select('*')
             .order('created_at');
 
+        final cloudSaleUids = <String>{};
         for (final row in cloudSales) {
-          await LocalDb.instance.upsertCloudSale(
-            Map<String, dynamic>.from(row),
-          );
+          final cloudSale = Map<String, dynamic>.from(row);
+          final uid = (cloudSale['sync_uid'] ?? '').toString();
+          if (uid.isNotEmpty) cloudSaleUids.add(uid);
+          final changed = await LocalDb.instance.upsertCloudSale(cloudSale);
+          if (changed) salesDownloaded++;
         }
+        await LocalDb.instance.pruneSyncedSales(cloudSaleUids);
       } catch (e) {
         return 'Sales sync error: $e';
       }
@@ -347,13 +400,57 @@ class SyncService {
               .toList();
 
           final localReturnId = localHeader['id'] as int;
-          final returnNo =
+          var returnSyncUid = (localHeader['sync_uid'] ?? '').toString();
+          if (returnSyncUid.isEmpty) {
+            returnSyncUid =
+                await LocalDb.instance.ensureReturnSyncUid(localReturnId);
+          }
+          final localSaleId = (localHeader['sale_id'] as num).toInt();
+          final saleSyncUid =
+              await LocalDb.instance.ensureSaleSyncUid(localSaleId);
+          final originalReturnNo =
               (localHeader['return_no'] ?? '').toString();
+          final localReturnDate =
+              (localHeader['return_date'] ?? '').toString();
+          final localInvoiceNo =
+              (localHeader['invoice_no'] ?? '').toString();
+
+          String returnNo = originalReturnNo;
+          var returnSuffix = 0;
+          while (true) {
+            final collision = await client
+                .from('returns')
+                .select('id, sync_uid, sale_invoice_no, return_date')
+                .eq('return_no', returnNo)
+                .limit(1);
+            if (collision.isEmpty) break;
+            final cloudUid = (collision.first['sync_uid'] ?? '').toString();
+            final cloudInvoice =
+                (collision.first['sale_invoice_no'] ?? '').toString();
+            final cloudDate = (collision.first['return_date'] ?? '').toString();
+            if (cloudUid == returnSyncUid ||
+                (cloudInvoice == localInvoiceNo &&
+                    cloudDate == localReturnDate &&
+                    localReturnDate.isNotEmpty)) {
+              break;
+            }
+            returnSuffix++;
+            returnNo = '${originalReturnNo}_$returnSuffix';
+          }
+
+          if (returnNo != originalReturnNo) {
+            await LocalDb.instance.renameReturnNoForSync(
+              localReturnId,
+              returnNo,
+            );
+          }
 
           final headerPayload = <String, Object?>{
+            'sync_uid': returnSyncUid,
+            'sale_sync_uid': saleSyncUid,
             'return_no': returnNo,
             'sale_invoice_no':
-                (localHeader['invoice_no'] ?? '').toString(),
+                localInvoiceNo,
             'customer_name':
                 (localHeader['customer_name'] ?? '').toString(),
             'return_date':
@@ -366,11 +463,18 @@ class SyncService {
             'created_by': client.auth.currentUser?.id,
           };
 
-          final existingHeader = await client
+          var existingHeader = await client
               .from('returns')
               .select('id')
-              .eq('return_no', returnNo)
+              .eq('sync_uid', returnSyncUid)
               .limit(1);
+          if (existingHeader.isEmpty) {
+            existingHeader = await client
+                .from('returns')
+                .select('id')
+                .eq('return_no', returnNo)
+                .limit(1);
+          }
 
           int cloudReturnId;
 
@@ -419,8 +523,11 @@ class SyncService {
             .select('*')
             .order('return_date');
 
+        final cloudReturnUids = <String>{};
         for (final row in cloudReturns) {
           final header = Map<String, dynamic>.from(row);
+          final uid = (header['sync_uid'] ?? '').toString();
+          if (uid.isNotEmpty) cloudReturnUids.add(uid);
           final cloudReturnId = (header['id'] as num?)?.toInt();
           if (cloudReturnId == null) continue;
 
@@ -433,11 +540,13 @@ class SyncService {
               .map((e) => Map<String, dynamic>.from(e))
               .toList();
 
-          await LocalDb.instance.upsertCloudReturn(
+          final changed = await LocalDb.instance.upsertCloudReturn(
             header,
             lines,
           );
+          if (changed) returnsDownloaded++;
         }
+        await LocalDb.instance.pruneSyncedReturns(cloudReturnUids);
       } catch (e) {
         return 'Returns sync error: $e';
       }
@@ -447,13 +556,11 @@ class SyncService {
       await LocalDb.instance.setLastSync(now);
 
       return 'Sync complete: '
-          '$inventoryUploaded inventory, '
-          '$salesUploaded sales, '
-          '$returnsUploaded returns uploaded.';
+          'Inventory $inventoryUploaded up / $inventoryDownloaded down, '
+          'Sales $salesUploaded up / $salesDownloaded down, '
+          'Returns $returnsUploaded up / $returnsDownloaded down.';
     } catch (e) {
       return 'Sync error: $e';
-    } finally {
-      _syncing = false;
     }
   }
 
