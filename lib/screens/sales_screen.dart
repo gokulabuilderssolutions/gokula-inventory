@@ -77,6 +77,25 @@ class _SalesScreenState extends State<SalesScreen> {
     await Printing.sharePdf(bytes: await file.readAsBytes(), filename: '${sale.invoiceNo.replaceAll('/', '-')}.pdf');
   }
 
+
+  Future<void> showSaleDetails(Sale sale) async {
+    if (sale.id == null) return;
+
+    final lines = await LocalDb.instance.saleLines(sale.id!);
+
+    if (!mounted) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _SaleDetailsScreen(
+          sale: sale,
+          lines: lines,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final total = sales.fold<double>(0, (sum, sale) => sum + sale.grandTotal);
@@ -127,7 +146,7 @@ class _SalesScreenState extends State<SalesScreen> {
                               if (isAdmin) const PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Delete invoice'))),
                             ],
                           ),
-                          onTap: () => openInvoice(sale),
+                          onTap: () => showSaleDetails(sale),
                         ),
                       );
                     }),
@@ -138,6 +157,152 @@ class _SalesScreenState extends State<SalesScreen> {
     );
   }
 }
+
+
+class _SaleDetailsScreen extends StatelessWidget {
+  final Sale sale;
+  final List<SaleLine> lines;
+
+  const _SaleDetailsScreen({
+    required this.sale,
+    required this.lines,
+  });
+
+  Future<void> _shareInvoice(BuildContext context) async {
+    final file = await InvoiceService.createInvoice(sale, lines);
+
+    await Printing.sharePdf(
+      bytes: await file.readAsBytes(),
+      filename: '${sale.invoiceNo.replaceAll('/', '-')}.pdf',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dt = DateTime.tryParse(sale.createdAt);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Invoice Details'),
+        actions: [
+          IconButton(
+            tooltip: 'View / Share PDF',
+            onPressed: () => _shareInvoice(context),
+            icon: const Icon(Icons.picture_as_pdf),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    sale.invoiceNo,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Customer: ${sale.customerName}'),
+                  Text(
+                    'Date: ${dt == null ? sale.createdAt : DateFormat('dd-MM-yyyy hh:mm a').format(dt)}',
+                  ),
+                  Text('Payment: ${sale.paymentMode}'),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Designs',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (lines.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(
+                  child: Text('No design details available.'),
+                ),
+              ),
+            )
+          else
+            ...lines.map(
+              (line) => Card(
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.grid_view),
+                  ),
+                  title: Text(
+                    line.tileName,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Quantity: ${line.quantity} box(es)\n'
+                    'Rate: ₹${line.unitPrice.toStringAsFixed(2)}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Text(
+                    '₹${line.lineTotal.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          const Divider(height: 28),
+          ListTile(
+            title: const Text('Subtotal'),
+            trailing: Text(
+              '₹${sale.subtotal.toStringAsFixed(2)}',
+            ),
+          ),
+          ListTile(
+            title: Text(
+              'GST ${sale.gstPercent.toStringAsFixed(0)}%',
+            ),
+            trailing: Text(
+              '₹${sale.gstAmount.toStringAsFixed(2)}',
+            ),
+          ),
+          ListTile(
+            title: const Text(
+              'Grand Total',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            trailing: Text(
+              '₹${sale.grandTotal.toStringAsFixed(2)}',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 17,
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: () => _shareInvoice(context),
+            icon: const Icon(Icons.picture_as_pdf),
+            label: const Text('View / Share Invoice PDF'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 class _CartRow {
   final InventoryItem item;

@@ -1185,6 +1185,208 @@ class LocalDb {
     ''', [saleId]);
   }
 
+
+  Future<int> createReturnMulti({
+    required int saleId,
+    required String invoiceNo,
+    required int? customerId,
+    required String customerName,
+    required List<Map<String, Object?>> lines,
+    required String reason,
+  }) async {
+    if (lines.isEmpty) {
+      throw StateError('Select at least one design to return.');
+    }
+
+    final db = await database;
+
+    return db.transaction((txn) async {
+      final saleRows = await txn.query(
+        'sales',
+        where: 'id=? AND invoice_no=?',
+        whereArgs: [saleId, invoiceNo],
+        limit: 1,
+      );
+
+      if (saleRows.isEmpty) {
+        throw StateError('Original invoice could not be found.');
+      }
+
+      final seenSaleLines = <int>{};
+      final validated = <Map<String, Object?>>[];
+      double totalAmount = 0;
+
+      for (final requested in lines) {
+        final saleLineId =
+            (requested['sale_line_id'] as num?)?.toInt() ?? 0;
+        final inventoryId =
+            (requested['inventory_id'] as num?)?.toInt() ?? 0;
+        final tileName =
+            (requested['tile_name'] ?? '').toString();
+        final quantity =
+            (requested['quantity'] as num?)?.toInt() ?? 0;
+        final unitPrice =
+            (requested['unit_price'] as num?)?.toDouble() ?? -1;
+
+        if (saleLineId <= 0 || inventoryId <= 0) {
+          throw StateError(
+            'Invalid design selected for return.',
+          );
+        }
+
+        if (!seenSaleLines.add(saleLineId)) {
+          throw StateError(
+            '$tileName was selected more than once.',
+          );
+        }
+
+        if (quantity <= 0) {
+          throw StateError(
+            'Return quantity for $tileName must be greater than zero.',
+          );
+        }
+
+        if (unitPrice < 0) {
+          throw StateError(
+            'Return price for $tileName cannot be negative.',
+          );
+        }
+
+        final lineRows = await txn.query(
+          'sale_lines',
+          where: 'id=? AND sale_id=? AND inventory_id=?',
+          whereArgs: [
+            saleLineId,
+            saleId,
+            inventoryId,
+          ],
+          limit: 1,
+        );
+
+        if (lineRows.isEmpty) {
+          throw StateError(
+            '$tileName was not found on the original invoice.',
+          );
+        }
+
+        final soldQty =
+            (lineRows.first['quantity'] as num).toInt();
+
+        final alreadyReturned =
+            Sqflite.firstIntValue(
+                  await txn.rawQuery(
+                    """
+                    SELECT COALESCE(SUM(quantity), 0)
+                    FROM return_lines
+                    WHERE sale_line_id=?
+                    """,
+                    [saleLineId],
+                  ),
+                ) ??
+                0;
+
+        final availableToReturn =
+            soldQty - alreadyReturned;
+
+        if (availableToReturn <= 0) {
+          throw StateError(
+            '$tileName has already been fully returned.',
+          );
+        }
+
+        if (quantity > availableToReturn) {
+          throw StateError(
+            'Only $availableToReturn box(es) of $tileName can still be returned.',
+          );
+        }
+
+        final inventoryRows = await txn.query(
+          'inventory',
+          where: 'id=? AND deleted=0',
+          whereArgs: [inventoryId],
+          limit: 1,
+        );
+
+        if (inventoryRows.isEmpty) {
+          throw StateError(
+            'Inventory item $tileName could not be found.',
+          );
+        }
+
+        final lineTotal = quantity * unitPrice;
+
+        validated.add({
+          'sale_line_id': saleLineId,
+          'inventory_id': inventoryId,
+          'tile_name': tileName,
+          'quantity': quantity,
+          'unit_price': unitPrice,
+          'line_total': lineTotal,
+        });
+
+        totalAmount += lineTotal;
+      }
+
+      final now = DateTime.now().toIso8601String();
+
+      final returnNo =
+          'PENDING-RETURN-${DateTime.now().microsecondsSinceEpoch}';
+
+      final saleSyncUid =
+          (saleRows.first['sync_uid'] ?? '').toString();
+
+      final returnId = await txn.insert(
+        'returns',
+        {
+          'sync_uid': _newSyncUid('return'),
+          'sale_sync_uid': saleSyncUid,
+          'return_no': returnNo,
+          'sale_id': saleId,
+          'invoice_no': invoiceNo,
+          'customer_id': customerId,
+          'customer_name': customerName,
+          'return_date': now,
+          'reason': reason.trim(),
+          'total_amount': totalAmount,
+          'sync_state': 'pending',
+        },
+      );
+
+      for (final line in validated) {
+        await txn.insert(
+          'return_lines',
+          {
+            'return_id': returnId,
+            'sale_id': saleId,
+            'sale_line_id': line['sale_line_id'],
+            'inventory_id': line['inventory_id'],
+            'tile_name': line['tile_name'],
+            'quantity': line['quantity'],
+            'unit_price': line['unit_price'],
+            'line_total': line['line_total'],
+          },
+        );
+
+        await txn.rawUpdate(
+          """
+          UPDATE inventory
+          SET stock = stock + ?,
+              sync_state = 'pending',
+              updated_at = ?
+          WHERE id = ?
+          """,
+          [
+            line['quantity'],
+            now,
+            line['inventory_id'],
+          ],
+        );
+      }
+
+      return returnId;
+    });
+  }
+
   Future<int> createReturn({
     required int saleId,
     required String invoiceNo,
@@ -1320,6 +1522,7 @@ class LocalDb {
         r.total_amount,
         r.sync_state,
         COALESCE(SUM(rl.quantity), 0) AS total_boxes,
+        COUNT(rl.id) AS design_count,
         COALESCE(MAX(rl.quantity), 0) AS line_quantity,
         COALESCE(MAX(rl.unit_price), 0) AS unit_price
       FROM returns r
@@ -1327,6 +1530,20 @@ class LocalDb {
       GROUP BY r.id
       ORDER BY r.return_date DESC
     ''');
+  }
+
+
+  Future<List<Map<String, Object?>>> returnLinesForReturn(
+    int returnId,
+  ) async {
+    final db = await database;
+
+    return db.query(
+      'return_lines',
+      where: 'return_id=?',
+      whereArgs: [returnId],
+      orderBy: 'id',
+    );
   }
 
   Future<List<Map<String, Object?>>> pendingReturnsWithLines() async {

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/sale.dart';
-import '../services/local_db.dart';
 import '../services/auth_service.dart';
+import '../services/local_db.dart';
 
 class ReturnsScreen extends StatefulWidget {
   const ReturnsScreen({super.key});
@@ -13,19 +13,27 @@ class ReturnsScreen extends StatefulWidget {
 }
 
 class _ReturnsScreenState extends State<ReturnsScreen> {
-  final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _qtyController = TextEditingController(text: '1');
-  final TextEditingController _priceController = TextEditingController();
-  final TextEditingController _reasonController = TextEditingController();
+  final TextEditingController _searchController =
+      TextEditingController();
+
+  final TextEditingController _reasonController =
+      TextEditingController();
 
   List<Sale> _sales = [];
   List<Map<String, Object?>> _returnableLines = [];
   List<Map<String, Object?>> _history = [];
 
+  final Set<int> _selectedLineIds = {};
+
+  final Map<int, TextEditingController>
+      _quantityControllers = {};
+
+  final Map<int, TextEditingController>
+      _priceControllers = {};
+
   String _searchMode = 'invoice';
   String? _selectedCustomer;
   Sale? _selectedSale;
-  int? _selectedSaleLineId;
 
   bool _loading = true;
   bool _saving = false;
@@ -34,9 +42,13 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
   @override
   void initState() {
     super.initState();
+
     _load();
     _loadPermissions();
-    _searchController.addListener(_refreshSuggestions);
+
+    _searchController.addListener(
+      _refreshSuggestions,
+    );
   }
 
   @override
@@ -44,25 +56,57 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
     _searchController
       ..removeListener(_refreshSuggestions)
       ..dispose();
-    _qtyController.dispose();
-    _priceController.dispose();
+
     _reasonController.dispose();
+
+    _disposeLineControllers();
+
     super.dispose();
+  }
+
+  void _disposeLineControllers() {
+    for (final controller
+        in _quantityControllers.values) {
+      controller.dispose();
+    }
+
+    for (final controller
+        in _priceControllers.values) {
+      controller.dispose();
+    }
+
+    _quantityControllers.clear();
+    _priceControllers.clear();
   }
 
   void _refreshSuggestions() {
     if (mounted) setState(() {});
   }
 
+  int _asInt(Object? value) =>
+      (value as num?)?.toInt() ?? 0;
+
+  double _asDouble(Object? value) =>
+      (value as num?)?.toDouble() ?? 0;
+
   Future<void> _loadPermissions() async {
-    final admin = await AuthService().isAdmin();
-    if (mounted) setState(() => _isAdmin = admin);
+    final admin =
+        await AuthService().isAdmin();
+
+    if (mounted) {
+      setState(() => _isAdmin = admin);
+    }
   }
 
   Future<void> _load() async {
-    final sales = await LocalDb.instance.sales();
-    final history = await LocalDb.instance.returnsHistory();
+    final sales =
+        await LocalDb.instance.sales();
+
+    final history =
+        await LocalDb.instance.returnsHistory();
+
     if (!mounted) return;
+
     setState(() {
       _sales = sales;
       _history = history;
@@ -71,328 +115,916 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
   }
 
   List<String> get _suggestions {
-    final q = _searchController.text.trim().toLowerCase();
+    final q =
+        _searchController.text.trim().toLowerCase();
+
     if (q.isEmpty) return const [];
 
     final values = <String>{};
+
     if (_searchMode == 'invoice') {
       for (final sale in _sales) {
-        if (sale.invoiceNo.toLowerCase().contains(q)) {
+        if (sale.invoiceNo
+            .toLowerCase()
+            .contains(q)) {
           values.add(sale.invoiceNo);
         }
       }
     } else {
       for (final sale in _sales) {
-        if (sale.customerName.toLowerCase().contains(q)) {
+        if (sale.customerName
+            .toLowerCase()
+            .contains(q)) {
           values.add(sale.customerName);
         }
       }
     }
 
     final list = values.toList();
-    list.sort((a, b) {
-      final aLower = a.toLowerCase();
-      final bLower = b.toLowerCase();
-      final aStarts = aLower.startsWith(q);
-      final bStarts = bLower.startsWith(q);
-      if (aStarts != bStarts) return aStarts ? -1 : 1;
-      return aLower.compareTo(bLower);
-    });
-    return list.take(12).toList();
+
+    list.sort(
+      (a, b) =>
+          a.toLowerCase().compareTo(
+                b.toLowerCase(),
+              ),
+    );
+
+    return list.take(15).toList();
   }
 
   List<Sale> get _customerSales {
     final name = _selectedCustomer;
+
     if (name == null) return const [];
-    return _sales.where((sale) => sale.customerName == name).toList();
+
+    return _sales
+        .where(
+          (sale) =>
+              sale.customerName == name,
+        )
+        .toList();
   }
 
-  Map<String, Object?>? get _selectedLine {
-    final id = _selectedSaleLineId;
-    if (id == null) return null;
-    for (final line in _returnableLines) {
-      if ((line['sale_line_id'] as num?)?.toInt() == id) return line;
-    }
-    return null;
-  }
-
-  int _asInt(Object? value) => (value as num?)?.toInt() ?? 0;
-  double _asDouble(Object? value) => (value as num?)?.toDouble() ?? 0;
-
-  Future<void> _chooseSuggestion(String value) async {
+  Future<void> _chooseSuggestion(
+    String value,
+  ) async {
     _searchController.text = value;
+
     _searchController.selection =
-        TextSelection.collapsed(offset: _searchController.text.length);
+        TextSelection.collapsed(
+      offset: value.length,
+    );
 
     if (_searchMode == 'invoice') {
-      Sale? found;
       for (final sale in _sales) {
         if (sale.invoiceNo == value) {
-          found = sale;
-          break;
+          await _selectSale(sale);
+          return;
         }
       }
-      if (found != null) await _selectSale(found);
     } else {
       setState(() {
         _selectedCustomer = value;
         _selectedSale = null;
         _returnableLines = [];
-        _selectedSaleLineId = null;
-        _priceController.clear();
+        _selectedLineIds.clear();
       });
 
-      final matches =
-          _sales.where((sale) => sale.customerName == value).toList();
+      final matches = _sales
+          .where(
+            (sale) =>
+                sale.customerName == value,
+          )
+          .toList();
+
       if (matches.length == 1) {
-        await _selectSale(matches.first);
+        await _selectSale(
+          matches.first,
+        );
       }
     }
   }
 
-  Future<void> _selectSale(Sale sale) async {
+  Future<void> _selectSale(
+    Sale sale,
+  ) async {
     if (sale.id == null) return;
-    final lines = await LocalDb.instance.returnableLinesForSale(sale.id!);
+
+    final lines =
+        await LocalDb.instance
+            .returnableLinesForSale(
+      sale.id!,
+    );
+
     if (!mounted) return;
 
-    final availableLines = lines.where((line) {
-      final sold = _asInt(line['sold_quantity']);
-      final returned = _asInt(line['returned_quantity']);
-      return sold - returned > 0;
-    }).toList();
+    final available = lines.where(
+      (line) {
+        final sold =
+            _asInt(line['sold_quantity']);
+
+        final returned =
+            _asInt(
+          line['returned_quantity'],
+        );
+
+        return sold - returned > 0;
+      },
+    ).toList();
+
+    _disposeLineControllers();
+
+    for (final line in available) {
+      final id =
+          _asInt(line['sale_line_id']);
+
+      _quantityControllers[id] =
+          TextEditingController(
+        text: '1',
+      );
+
+      _priceControllers[id] =
+          TextEditingController(
+        text: _asDouble(
+          line['original_unit_price'],
+        ).toStringAsFixed(2),
+      );
+    }
 
     setState(() {
       _selectedSale = sale;
-      _selectedCustomer = sale.customerName;
-      _returnableLines = availableLines;
-      _selectedSaleLineId = null;
-      _qtyController.text = '1';
-      _priceController.clear();
-    });
-  }
+      _selectedCustomer =
+          sale.customerName;
 
-  void _selectMaterial(int? saleLineId) {
-    setState(() {
-      _selectedSaleLineId = saleLineId;
-      _qtyController.text = '1';
+      _returnableLines = available;
 
-      final line = _selectedLine;
-      if (line == null) {
-        _priceController.clear();
-      } else {
-        _priceController.text =
-            _asDouble(line['original_unit_price']).toStringAsFixed(2);
-      }
+      _selectedLineIds.clear();
     });
   }
 
   Future<void> _saveReturn() async {
     final sale = _selectedSale;
-    final line = _selectedLine;
-    if (sale == null || sale.id == null) {
-      _showMessage('Select an invoice first.');
-      return;
-    }
-    if (line == null) {
-      _showMessage('Select a material to return.');
+
+    if (sale == null ||
+        sale.id == null) {
+      _showMessage(
+        'Select an invoice first.',
+      );
+
       return;
     }
 
-    final sold = _asInt(line['sold_quantity']);
-    final alreadyReturned = _asInt(line['returned_quantity']);
-    final remaining = sold - alreadyReturned;
-    final qty = int.tryParse(_qtyController.text.trim()) ?? 0;
-    final price = double.tryParse(_priceController.text.trim()) ?? -1;
+    if (_selectedLineIds.isEmpty) {
+      _showMessage(
+        'Select at least one design to return.',
+      );
 
-    if (qty <= 0) {
-      _showMessage('Enter the number of boxes being returned.');
-      return;
-    }
-    if (qty > remaining) {
-      _showMessage('Maximum return quantity is $remaining box(es).');
-      return;
-    }
-    if (price < 0) {
-      _showMessage('Enter a valid return price.');
       return;
     }
 
-    final confirmed = await showDialog<bool>(
+    final selected =
+        <Map<String, Object?>>[];
+
+    var totalBoxes = 0;
+    var totalAmount = 0.0;
+
+    for (final line
+        in _returnableLines) {
+      final saleLineId =
+          _asInt(
+        line['sale_line_id'],
+      );
+
+      if (!_selectedLineIds
+          .contains(saleLineId)) {
+        continue;
+      }
+
+      final sold =
+          _asInt(
+        line['sold_quantity'],
+      );
+
+      final alreadyReturned =
+          _asInt(
+        line['returned_quantity'],
+      );
+
+      final available =
+          sold - alreadyReturned;
+
+      final qty =
+          int.tryParse(
+                _quantityControllers[
+                        saleLineId]
+                    ?.text
+                    .trim() ??
+                '',
+              ) ??
+              0;
+
+      final price =
+          double.tryParse(
+                _priceControllers[
+                        saleLineId]
+                    ?.text
+                    .trim() ??
+                '',
+              ) ??
+              -1;
+
+      final design =
+          (line['tile_name'] ?? '')
+              .toString();
+
+      if (qty <= 0) {
+        _showMessage(
+          'Enter return quantity for $design.',
+        );
+
+        return;
+      }
+
+      if (qty > available) {
+        _showMessage(
+          'Only $available box(es) of $design can be returned.',
+        );
+
+        return;
+      }
+
+      if (price < 0) {
+        _showMessage(
+          'Enter a valid price for $design.',
+        );
+
+        return;
+      }
+
+      totalBoxes += qty;
+      totalAmount += qty * price;
+
+      selected.add({
+        'sale_line_id': saleLineId,
+        'inventory_id':
+            _asInt(
+          line['inventory_id'],
+        ),
+        'tile_name': design,
+        'quantity': qty,
+        'unit_price': price,
+      });
+    }
+
+    final summary = selected
+        .map(
+          (line) =>
+              '${line['tile_name']} - '
+              '${line['quantity']} box(es)',
+        )
+        .join('\n');
+
+    final confirmed =
+        await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Confirm Return'),
-        content: Text(
-          '${line['tile_name']}\n'
-          'Return: $qty box(es)\n'
-          'Price: ₹${price.toStringAsFixed(2)} per box\n'
-          'Amount: ₹${(qty * price).toStringAsFixed(2)}\n\n'
-          'Returned stock will be added back to inventory.',
+      builder: (
+        dialogContext,
+      ) =>
+          AlertDialog(
+        title: const Text(
+          'Confirm Return',
+        ),
+        content:
+            SingleChildScrollView(
+          child: Text(
+            '$summary\n\n'
+            'Total: $totalBoxes box(es)\n'
+            'Amount: ₹${totalAmount.toStringAsFixed(2)}\n\n'
+            'Returned stock will be added back to inventory.',
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
+            onPressed: () =>
+                Navigator.pop(
+              dialogContext,
+              false,
+            ),
+            child:
+                const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Confirm'),
+            onPressed: () =>
+                Navigator.pop(
+              dialogContext,
+              true,
+            ),
+            child:
+                const Text('Confirm'),
           ),
         ],
       ),
     );
 
-    if (confirmed != true || !mounted) return;
+    if (confirmed != true ||
+        !mounted) {
+      return;
+    }
 
-    setState(() => _saving = true);
+    setState(
+      () => _saving = true,
+    );
+
     try {
-      await LocalDb.instance.createReturn(
+      await LocalDb.instance
+          .createReturnMulti(
         saleId: sale.id!,
         invoiceNo: sale.invoiceNo,
         customerId: sale.customerId,
-        customerName: sale.customerName,
-        saleLineId: _asInt(line['sale_line_id']),
-        inventoryId: _asInt(line['inventory_id']),
-        tileName: (line['tile_name'] ?? '').toString(),
-        quantity: qty,
-        unitPrice: price,
-        reason: _reasonController.text,
+        customerName:
+            sale.customerName,
+        lines: selected,
+        reason:
+            _reasonController.text,
       );
 
       _reasonController.clear();
+
       await _selectSale(sale);
-      final history = await LocalDb.instance.returnsHistory();
+
+      final history =
+          await LocalDb.instance
+              .returnsHistory();
 
       if (!mounted) return;
-      setState(() => _history = history);
+
+      setState(
+        () => _history = history,
+      );
+
       _showMessage(
-        'Return saved. $qty box(es) added back to inventory.',
+        'Return saved. $totalBoxes box(es) added back to inventory.',
       );
     } catch (error) {
-      if (mounted) _showMessage('Could not save return: $error');
+      if (mounted) {
+        _showMessage(
+          'Could not save return: $error',
+        );
+      }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(
+          () => _saving = false,
+        );
+      }
     }
   }
 
-  void _showMessage(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text)),
+  Future<void> _showReturnDetails(
+    Map<String, Object?> row,
+  ) async {
+    final returnId =
+        _asInt(row['id']);
+
+    final lines =
+        await LocalDb.instance
+            .returnLinesForReturn(
+      returnId,
+    );
+
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (
+        bottomContext,
+      ) {
+        return SafeArea(
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.65,
+            minChildSize: 0.35,
+            maxChildSize: 0.9,
+            builder: (
+              context,
+              scrollController,
+            ) {
+              return ListView(
+                controller:
+                    scrollController,
+                padding:
+                    const EdgeInsets.all(
+                  16,
+                ),
+                children: [
+                  Text(
+                    (row['return_no'] ??
+                            '')
+                        .toString(),
+                    style: Theme.of(
+                      context,
+                    )
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(
+                          fontWeight:
+                              FontWeight
+                                  .bold,
+                        ),
+                  ),
+                  const SizedBox(
+                    height: 8,
+                  ),
+                  Text(
+                    'Invoice: ${row['invoice_no']}',
+                  ),
+                  Text(
+                    'Customer: ${row['customer_name']}',
+                  ),
+                  Text(
+                    'Date: ${_formatDate((row['return_date'] ?? '').toString())}',
+                  ),
+                  if ((row['reason'] ?? '')
+                      .toString()
+                      .trim()
+                      .isNotEmpty)
+                    Text(
+                      'Reason: ${row['reason']}',
+                    ),
+                  const Divider(
+                    height: 28,
+                  ),
+                  const Text(
+                    'Returned Designs',
+                    style: TextStyle(
+                      fontWeight:
+                          FontWeight.bold,
+                      fontSize: 17,
+                    ),
+                  ),
+                  const SizedBox(
+                    height: 6,
+                  ),
+                  if (lines.isEmpty)
+                    const Padding(
+                      padding:
+                          EdgeInsets.all(
+                        16,
+                      ),
+                      child: Text(
+                        'No return line details available.',
+                      ),
+                    )
+                  else
+                    ...lines.map(
+                      (line) =>
+                          Card(
+                        child: ListTile(
+                          title: Text(
+                            (line['tile_name'] ??
+                                    '')
+                                .toString(),
+                            style:
+                                const TextStyle(
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+                          subtitle: Text(
+                            'Quantity: ${_asInt(line['quantity'])} box(es)\n'
+                            'Rate: ₹${_asDouble(line['unit_price']).toStringAsFixed(2)}',
+                          ),
+                          isThreeLine:
+                              true,
+                          trailing: Text(
+                            '₹${_asDouble(line['line_total']).toStringAsFixed(2)}',
+                            style:
+                                const TextStyle(
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  const Divider(),
+                  ListTile(
+                    title: const Text(
+                      'Return Total',
+                      style: TextStyle(
+                        fontWeight:
+                            FontWeight
+                                .bold,
+                      ),
+                    ),
+                    trailing: Text(
+                      '₹${_asDouble(row['total_amount']).toStringAsFixed(2)}',
+                      style:
+                          const TextStyle(
+                        fontWeight:
+                            FontWeight
+                                .bold,
+                        fontSize: 17,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _editReturn(
+    Map<String, Object?> row,
+  ) async {
+    if (!_isAdmin) return;
+
+    final designCount =
+        _asInt(
+      row['design_count'],
+    );
+
+    if (designCount > 1) {
+      _showMessage(
+        'This return contains multiple designs. Delete and recreate it if correction is required.',
+      );
+
+      return;
+    }
+
+    final id =
+        _asInt(row['id']);
+
+    final qty =
+        TextEditingController(
+      text: _asInt(
+        row['line_quantity'],
+      ).toString(),
+    );
+
+    final price =
+        TextEditingController(
+      text: _asDouble(
+        row['unit_price'],
+      ).toStringAsFixed(2),
+    );
+
+    final reason =
+        TextEditingController(
+      text:
+          (row['reason'] ?? '')
+              .toString(),
+    );
+
+    final ok =
+        await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) =>
+              AlertDialog(
+        title: Text(
+          'Edit ${row['return_no']}',
+        ),
+        content:
+            SingleChildScrollView(
+          child: Column(
+            mainAxisSize:
+                MainAxisSize.min,
+            children: [
+              TextField(
+                controller: qty,
+                keyboardType:
+                    TextInputType
+                        .number,
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      'Return quantity',
+                ),
+              ),
+              TextField(
+                controller: price,
+                keyboardType:
+                    const TextInputType
+                        .numberWithOptions(
+                  decimal: true,
+                ),
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      'Return price',
+                ),
+              ),
+              TextField(
+                controller: reason,
+                maxLines: 2,
+                decoration:
+                    const InputDecoration(
+                  labelText: 'Reason',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(
+              dialogContext,
+              false,
+            ),
+            child:
+                const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(
+              dialogContext,
+              true,
+            ),
+            child:
+                const Text('Update'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    try {
+      await LocalDb.instance
+          .updateReturnAdmin(
+        returnId: id,
+        quantity:
+            int.tryParse(
+                  qty.text.trim(),
+                ) ??
+                0,
+        unitPrice:
+            double.tryParse(
+                  price.text.trim(),
+                ) ??
+                -1,
+        reason: reason.text,
+      );
+
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        _showMessage(
+          'Could not update return: $e',
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteReturn(
+    Map<String, Object?> row,
+  ) async {
+    if (!_isAdmin) return;
+
+    final ok =
+        await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) =>
+              AlertDialog(
+        title: const Text(
+          'Delete return?',
+        ),
+        content: Text(
+          'Delete ${row['return_no']}? Returned stock will be reversed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(
+              dialogContext,
+              false,
+            ),
+            child:
+                const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(
+              dialogContext,
+              true,
+            ),
+            child:
+                const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      await LocalDb.instance
+          .deleteReturnAdmin(
+        _asInt(row['id']),
+      );
+
+      await _load();
+    }
+  }
+
+  void _showMessage(
+    String text,
+  ) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      SnackBar(
+        content: Text(text),
+      ),
     );
   }
 
   Widget _buildSearchCard() {
-    final suggestions = _suggestions;
+    final suggestions =
+        _suggestions;
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding:
+            const EdgeInsets.all(14),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
           children: [
             const Text(
               'Find Original Sale',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.bold,
+                fontSize: 17,
+              ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(
+              height: 10,
+            ),
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(
                   value: 'invoice',
-                  icon: Icon(Icons.receipt_long),
-                  label: Text('Invoice'),
+                  icon: Icon(
+                    Icons.receipt_long,
+                  ),
+                  label:
+                      Text('Invoice'),
                 ),
                 ButtonSegment(
                   value: 'customer',
-                  icon: Icon(Icons.person_search),
-                  label: Text('Customer'),
+                  icon: Icon(
+                    Icons.person_search,
+                  ),
+                  label:
+                      Text('Customer'),
                 ),
               ],
-              selected: {_searchMode},
-              onSelectionChanged: (value) {
+              selected: {
+                _searchMode,
+              },
+              onSelectionChanged:
+                  (value) {
+                _disposeLineControllers();
+
                 setState(() {
-                  _searchMode = value.first;
-                  _searchController.clear();
-                  _selectedCustomer = null;
-                  _selectedSale = null;
-                  _returnableLines = [];
-                  _selectedSaleLineId = null;
-                  _priceController.clear();
+                  _searchMode =
+                      value.first;
+
+                  _searchController
+                      .clear();
+
+                  _selectedCustomer =
+                      null;
+
+                  _selectedSale =
+                      null;
+
+                  _returnableLines =
+                      [];
+
+                  _selectedLineIds
+                      .clear();
                 });
               },
             ),
-            const SizedBox(height: 12),
+            const SizedBox(
+              height: 12,
+            ),
             TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                labelText: _searchMode == 'invoice'
-                    ? 'Type invoice number'
-                    : 'Type customer name',
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-                suffixIcon: _searchController.text.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {});
-                        },
-                        icon: const Icon(Icons.clear),
-                      ),
+              controller:
+                  _searchController,
+              decoration:
+                  InputDecoration(
+                labelText:
+                    _searchMode ==
+                            'invoice'
+                        ? 'Type invoice number'
+                        : 'Type customer name',
+                prefixIcon:
+                    const Icon(
+                  Icons.search,
+                ),
+                border:
+                    const OutlineInputBorder(),
               ),
             ),
-            if (suggestions.isNotEmpty) ...[
-              const SizedBox(height: 4),
+            if (suggestions
+                .isNotEmpty) ...[
+              const SizedBox(
+                height: 6,
+              ),
               Container(
-                constraints: const BoxConstraints(maxHeight: 220),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: Theme.of(context).dividerColor,
-                  ),
-                  borderRadius: BorderRadius.circular(10),
+                constraints:
+                    const BoxConstraints(
+                  maxHeight: 220,
                 ),
-                child: ListView.separated(
+                decoration:
+                    BoxDecoration(
+                  border: Border.all(
+                    color:
+                        Theme.of(context)
+                            .dividerColor,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(
+                    10,
+                  ),
+                ),
+                child:
+                    ListView.separated(
                   shrinkWrap: true,
-                  itemCount: suggestions.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, index) {
-                    final value = suggestions[index];
+                  itemCount:
+                      suggestions.length,
+                  separatorBuilder:
+                      (_, __) =>
+                          const Divider(
+                    height: 1,
+                  ),
+                  itemBuilder:
+                      (_, index) {
+                    final value =
+                        suggestions[
+                            index];
+
                     return ListTile(
                       dense: true,
-                      leading: Icon(
-                        _searchMode == 'invoice'
-                            ? Icons.receipt
-                            : Icons.person,
+                      title:
+                          Text(value),
+                      onTap: () =>
+                          _chooseSuggestion(
+                        value,
                       ),
-                      title: Text(value),
-                      onTap: () => _chooseSuggestion(value),
                     );
                   },
                 ),
               ),
             ],
-            if (_searchMode == 'customer' &&
-                _selectedCustomer != null &&
-                _customerSales.length > 1) ...[
-              const SizedBox(height: 12),
-              DropdownButtonFormField<Sale>(
-                initialValue: _selectedSale,
+            if (_searchMode ==
+                    'customer' &&
+                _selectedCustomer !=
+                    null &&
+                _customerSales
+                        .length >
+                    1) ...[
+              const SizedBox(
+                height: 12,
+              ),
+              DropdownButtonFormField<
+                  Sale>(
                 isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Select invoice',
-                  border: OutlineInputBorder(),
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      'Select invoice',
+                  border:
+                      OutlineInputBorder(),
                 ),
-                items: _customerSales.map((sale) {
-                  final dt = DateTime.tryParse(sale.createdAt);
-                  final date = dt == null
-                      ? sale.createdAt
-                      : DateFormat('dd-MM-yyyy').format(dt);
-                  return DropdownMenuItem(
-                    value: sale,
-                    child: Text('${sale.invoiceNo} • $date'),
-                  );
-                }).toList(),
+                items:
+                    _customerSales
+                        .map(
+                  (sale) {
+                    return DropdownMenuItem(
+                      value: sale,
+                      child: Text(
+                        sale.invoiceNo,
+                      ),
+                    );
+                  },
+                ).toList(),
                 onChanged: (sale) {
-                  if (sale != null) _selectSale(sale);
+                  if (sale != null) {
+                    _selectSale(
+                      sale,
+                    );
+                  }
                 },
               ),
             ],
@@ -403,131 +1035,247 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
   }
 
   Widget _buildReturnForm() {
-    final sale = _selectedSale;
-    if (sale == null) return const SizedBox.shrink();
+    final sale =
+        _selectedSale;
 
-    final line = _selectedLine;
-    final sold = line == null ? 0 : _asInt(line['sold_quantity']);
-    final returned = line == null ? 0 : _asInt(line['returned_quantity']);
-    final returnable = sold - returned;
-    final qty = int.tryParse(_qtyController.text.trim()) ?? 0;
-    final price = double.tryParse(_priceController.text.trim()) ?? 0;
+    if (sale == null) {
+      return const SizedBox
+          .shrink();
+    }
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding:
+            const EdgeInsets.all(
+          14,
+        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
           children: [
             const Text(
-              'Return Details',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+              'Return Designs',
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.bold,
+                fontSize: 17,
+              ),
             ),
-            const SizedBox(height: 8),
-            Text('Invoice: ${sale.invoiceNo}'),
-            Text('Customer: ${sale.customerName}'),
-            Text('Sale date: ${_formatDate(sale.createdAt)}'),
-            const Divider(height: 24),
-            if (_returnableLines.isEmpty)
+            const SizedBox(
+              height: 8,
+            ),
+            Text(
+              'Invoice: ${sale.invoiceNo}',
+            ),
+            Text(
+              'Customer: ${sale.customerName}',
+            ),
+            Text(
+              'Sale Date: ${_formatDate(sale.createdAt)}',
+            ),
+            const Divider(
+              height: 24,
+            ),
+            if (_returnableLines
+                .isEmpty)
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
+                padding:
+                    EdgeInsets.all(
+                  12,
+                ),
                 child: Text(
-                  'All materials on this invoice have already been fully returned.',
+                  'All designs on this invoice have already been fully returned.',
                 ),
               )
             else ...[
-              DropdownButtonFormField<int>(
-                initialValue: _selectedSaleLineId,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Material',
-                  border: OutlineInputBorder(),
-                ),
-                items: _returnableLines.map((item) {
-                  final soldQty = _asInt(item['sold_quantity']);
-                  final returnedQty = _asInt(item['returned_quantity']);
-                  final available = soldQty - returnedQty;
-                  return DropdownMenuItem(
-                    value: _asInt(item['sale_line_id']),
-                    child: Text(
-                      '${item['tile_name']} • $available box(es) returnable',
-                      overflow: TextOverflow.ellipsis,
+              const Text(
+                'Select one or more designs:',
+              ),
+              const SizedBox(
+                height: 8,
+              ),
+              ..._returnableLines.map(
+                (line) {
+                  final id =
+                      _asInt(
+                    line[
+                        'sale_line_id'],
+                  );
+
+                  final sold =
+                      _asInt(
+                    line[
+                        'sold_quantity'],
+                  );
+
+                  final returned =
+                      _asInt(
+                    line[
+                        'returned_quantity'],
+                  );
+
+                  final available =
+                      sold - returned;
+
+                  final selected =
+                      _selectedLineIds
+                          .contains(id);
+
+                  return Card(
+                    child: Column(
+                      children: [
+                        CheckboxListTile(
+                          value:
+                              selected,
+                          title: Text(
+                            (line['tile_name'] ??
+                                    '')
+                                .toString(),
+                            style:
+                                const TextStyle(
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+                          subtitle:
+                              Text(
+                            'Sold $sold • Returned $returned • Can return $available box(es)',
+                          ),
+                          onChanged:
+                              (value) {
+                            setState(
+                              () {
+                                if (value ==
+                                    true) {
+                                  _selectedLineIds
+                                      .add(
+                                    id,
+                                  );
+                                } else {
+                                  _selectedLineIds
+                                      .remove(
+                                    id,
+                                  );
+                                }
+                              },
+                            );
+                          },
+                        ),
+                        if (selected)
+                          Padding(
+                            padding:
+                                const EdgeInsets
+                                    .fromLTRB(
+                              16,
+                              0,
+                              16,
+                              14,
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child:
+                                      TextField(
+                                    controller:
+                                        _quantityControllers[
+                                            id],
+                                    keyboardType:
+                                        TextInputType
+                                            .number,
+                                    decoration:
+                                        InputDecoration(
+                                      labelText:
+                                          'Return Qty (max $available)',
+                                      border:
+                                          const OutlineInputBorder(),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(
+                                  width: 10,
+                                ),
+                                Expanded(
+                                  child:
+                                      TextField(
+                                    controller:
+                                        _priceControllers[
+                                            id],
+                                    keyboardType:
+                                        const TextInputType
+                                            .numberWithOptions(
+                                      decimal:
+                                          true,
+                                    ),
+                                    decoration:
+                                        const InputDecoration(
+                                      labelText:
+                                          'Rate',
+                                      prefixText:
+                                          '₹ ',
+                                      border:
+                                          OutlineInputBorder(),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
                   );
-                }).toList(),
-                onChanged: _selectMaterial,
+                },
               ),
-              if (line != null) ...[
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    Chip(label: Text('Sold: $sold boxes')),
-                    Chip(label: Text('Returned: $returned boxes')),
-                    Chip(label: Text('Can return: $returnable boxes')),
-                  ],
+              const SizedBox(
+                height: 10,
+              ),
+              TextField(
+                controller:
+                    _reasonController,
+                maxLines: 2,
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      'Return reason',
+                  hintText:
+                      'Damaged / excess / wrong design / other',
+                  border:
+                      OutlineInputBorder(),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _qtyController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'Return boxes (max $returnable)',
-                    border: const OutlineInputBorder(),
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _priceController,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: 'Return price per box',
-                    helperText:
-                        'Original selling price is filled automatically. You can edit it.',
-                    prefixText: '₹ ',
-                    border: OutlineInputBorder(),
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _reasonController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Return reason',
-                    hintText: 'Damaged / excess / wrong design / other',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Return Amount'),
-                  trailing: Text(
-                    '₹${(qty * price).toStringAsFixed(2)}',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
+              ),
+              const SizedBox(
+                height: 12,
+              ),
+              SizedBox(
+                width:
+                    double.infinity,
+                child:
+                    FilledButton.icon(
+                  onPressed:
+                      _saving
+                          ? null
+                          : _saveReturn,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth:
+                                2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons
+                              .assignment_return,
                         ),
+                  label: Text(
+                    _saving
+                        ? 'Saving...'
+                        : 'Confirm Selected Returns',
                   ),
                 ),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _saving ? null : _saveReturn,
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.assignment_return),
-                    label: Text(_saving ? 'Saving...' : 'Confirm Return'),
-                  ),
-                ),
-              ],
+              ),
             ],
           ],
         ),
@@ -535,141 +1283,229 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
     );
   }
 
-  Future<void> _editReturn(Map<String, Object?> row) async {
-    if (!_isAdmin) return;
-    final id = _asInt(row['id']);
-    final qty = TextEditingController(text: _asInt(row['line_quantity']).toString());
-    final price = TextEditingController(text: _asDouble(row['unit_price']).toStringAsFixed(2));
-    final reason = TextEditingController(text: (row['reason'] ?? '').toString());
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('Edit ${(row['return_no'] ?? '').toString()}'),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: qty, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Return quantity')),
-            TextField(controller: price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Return price')),
-            TextField(controller: reason, maxLines: 2, decoration: const InputDecoration(labelText: 'Reason')),
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Update')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    try {
-      await LocalDb.instance.updateReturnAdmin(
-        returnId: id,
-        quantity: int.tryParse(qty.text.trim()) ?? 0,
-        unitPrice: double.tryParse(price.text.trim()) ?? -1,
-        reason: reason.text,
-      );
-      await _load();
-    } catch (e) {
-      if (mounted) _showMessage('Could not update return: $e');
-    }
-  }
-
-  Future<void> _deleteReturn(Map<String, Object?> row) async {
-    if (!_isAdmin) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete return?'),
-        content: Text('Delete ${(row['return_no'] ?? '').toString()}? Returned stock will be reversed.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await LocalDb.instance.deleteReturnAdmin(_asInt(row['id']));
-      await _load();
-    }
-  }
-
   Widget _buildHistory() {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding:
+            const EdgeInsets.all(
+          14,
+        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
           children: [
             const Text(
               'Return History',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.bold,
+                fontSize: 17,
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(
+              height: 8,
+            ),
             if (_history.isEmpty)
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 16),
-                child: Center(child: Text('No returns recorded yet.')),
+                padding:
+                    EdgeInsets.all(
+                  16,
+                ),
+                child: Center(
+                  child: Text(
+                    'No returns recorded yet.',
+                  ),
+                ),
               )
             else
-              ..._history.take(30).map((row) {
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.assignment_return),
-                  ),
-                  title: Text(
-                    (row['return_no'] ?? '').toString(),
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Text(
-                    '${row['customer_name']}\n'
-                    '${row['invoice_no']} • ${row['total_boxes']} box(es)\n'
-                    '${_formatDate((row['return_date'] ?? '').toString())}',
-                  ),
-                  isThreeLine: true,
-                  trailing: _isAdmin
-                      ? PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'edit') _editReturn(row);
-                            if (value == 'delete') _deleteReturn(row);
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit), title: Text('Edit return'))),
-                            PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Delete return'))),
-                          ],
-                        )
-                      : Text(
-                          '₹${_asDouble(row['total_amount']).toStringAsFixed(2)}',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                );
-              }),
+              ..._history
+                  .take(50)
+                  .map(
+                (row) {
+                  final count =
+                      _asInt(
+                    row[
+                        'design_count'],
+                  );
+
+                  final totalBoxes =
+                      _asInt(
+                    row[
+                        'total_boxes'],
+                  );
+
+                  return ListTile(
+                    contentPadding:
+                        EdgeInsets.zero,
+                    leading:
+                        const CircleAvatar(
+                      child: Icon(
+                        Icons
+                            .assignment_return,
+                      ),
+                    ),
+                    title: Text(
+                      (row['return_no'] ??
+                              '')
+                          .toString(),
+                      style:
+                          const TextStyle(
+                        fontWeight:
+                            FontWeight
+                                .bold,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '${row['customer_name']}\n'
+                      '${row['invoice_no']} • '
+                      '$count design(s) • '
+                      '$totalBoxes box(es)\n'
+                      '${_formatDate((row['return_date'] ?? '').toString())}',
+                    ),
+                    isThreeLine: true,
+                    onTap: () =>
+                        _showReturnDetails(
+                      row,
+                    ),
+                    trailing:
+                        _isAdmin
+                            ? PopupMenuButton<
+                                String>(
+                                onSelected:
+                                    (value) {
+                                  if (value ==
+                                      'view') {
+                                    _showReturnDetails(
+                                      row,
+                                    );
+                                  }
+
+                                  if (value ==
+                                      'edit') {
+                                    _editReturn(
+                                      row,
+                                    );
+                                  }
+
+                                  if (value ==
+                                      'delete') {
+                                    _deleteReturn(
+                                      row,
+                                    );
+                                  }
+                                },
+                                itemBuilder:
+                                    (_) => [
+                                  const PopupMenuItem(
+                                    value:
+                                        'view',
+                                    child:
+                                        ListTile(
+                                      leading:
+                                          Icon(
+                                        Icons
+                                            .visibility,
+                                      ),
+                                      title:
+                                          Text(
+                                        'View designs',
+                                      ),
+                                    ),
+                                  ),
+                                  if (count <=
+                                      1)
+                                    const PopupMenuItem(
+                                      value:
+                                          'edit',
+                                      child:
+                                          ListTile(
+                                        leading:
+                                            Icon(
+                                          Icons
+                                              .edit,
+                                        ),
+                                        title:
+                                            Text(
+                                          'Edit return',
+                                        ),
+                                      ),
+                                    ),
+                                  const PopupMenuItem(
+                                    value:
+                                        'delete',
+                                    child:
+                                        ListTile(
+                                      leading:
+                                          Icon(
+                                        Icons
+                                            .delete_outline,
+                                      ),
+                                      title:
+                                          Text(
+                                        'Delete return',
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : const Icon(
+                                Icons
+                                    .chevron_right,
+                              ),
+                  );
+                },
+              ),
           ],
         ),
       ),
     );
   }
 
-  String _formatDate(String raw) {
-    final dt = DateTime.tryParse(raw);
-    return dt == null ? raw : DateFormat('dd-MM-yyyy').format(dt.toLocal());
+  String _formatDate(
+    String raw,
+  ) {
+    final dt =
+        DateTime.tryParse(raw);
+
+    return dt == null
+        ? raw
+        : DateFormat(
+            'dd-MM-yyyy',
+          ).format(
+            dt.toLocal(),
+          );
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sales Returns'),
+        title:
+            const Text(
+          'Sales Returns',
+        ),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(
+              child:
+                  CircularProgressIndicator(),
+            )
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
-                padding: const EdgeInsets.all(12),
+                padding:
+                    const EdgeInsets.all(
+                  12,
+                ),
                 children: [
                   _buildSearchCard(),
                   _buildReturnForm(),
                   _buildHistory(),
-                  const SizedBox(height: 40),
+                  const SizedBox(
+                    height: 40,
+                  ),
                 ],
               ),
             ),
