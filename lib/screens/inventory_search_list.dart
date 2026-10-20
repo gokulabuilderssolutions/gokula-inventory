@@ -7,6 +7,7 @@ import '../models/inventory_item.dart';
 class InventorySearchList extends StatefulWidget {
   final List<InventoryItem> items;
   final bool isAdmin;
+  final void Function(List<InventoryItem>)? onVisibleChanged;
   final Future<void> Function() onRefresh;
   final Future<void> Function(InventoryItem item) onEdit;
   final Future<void> Function(InventoryItem item) onDelete;
@@ -16,6 +17,7 @@ class InventorySearchList extends StatefulWidget {
     super.key,
     required this.items,
     required this.isAdmin,
+    this.onVisibleChanged,
     required this.onRefresh,
     required this.onEdit,
     required this.onDelete,
@@ -30,6 +32,8 @@ class _InventorySearchListState extends State<InventorySearchList> {
   final TextEditingController _searchController = TextEditingController();
   String? _selectedDesign;
   String _sortMode = 'design_az';
+  String _size = 'All Sizes';
+  String _finish = 'All Finishes';
 
   @override
   void initState() {
@@ -77,12 +81,24 @@ class _InventorySearchListState extends State<InventorySearchList> {
     return list.take(12).toList();
   }
 
+  List<String> _filterOptions({required bool size}) {
+    final options = <String>{};
+    for (final item in widget.items) {
+      final value = (size ? item.size : item.texture).trim();
+      if (value.isNotEmpty) options.add(value);
+    }
+    return options.toList()..sort();
+  }
+
   List<InventoryItem> get _visibleItems {
     final q = _searchController.text.trim().toLowerCase();
     final list = (q.isEmpty
             ? widget.items
             : widget.items.where((item) => item.tileName.toLowerCase().contains(q)))
         .toList();
+    list.removeWhere((item) =>
+        (_size != 'All Sizes' && item.size.trim() != _size) ||
+        (_finish != 'All Finishes' && item.texture.trim() != _finish));
     switch (_sortMode) {
       case 'design_za':
         list.sort((a, b) => b.tileName.toLowerCase().compareTo(a.tileName.toLowerCase()));
@@ -112,6 +128,10 @@ class _InventorySearchListState extends State<InventorySearchList> {
   Widget build(BuildContext context) {
     final suggestions = _suggestions;
     final visible = _visibleItems;
+    // Notify parent after frame so export uses precisely this view/order.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onVisibleChanged?.call(List<InventoryItem>.of(visible));
+    });
 
     return RefreshIndicator(
       onRefresh: widget.onRefresh,
@@ -156,6 +176,26 @@ class _InventorySearchListState extends State<InventorySearchList> {
               if (value != null) setState(() => _sortMode = value);
             },
           ),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: DropdownButtonFormField<String>(
+              value: _size,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Size', border: OutlineInputBorder()),
+              items: ['All Sizes', ..._filterOptions(size: true)]
+                  .map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis))).toList(),
+              onChanged: (v) => setState(() => _size = v ?? 'All Sizes'),
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: DropdownButtonFormField<String>(
+              value: _finish,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Finish', border: OutlineInputBorder()),
+              items: ['All Finishes', ..._filterOptions(size: false)]
+                  .map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis))).toList(),
+              onChanged: (v) => setState(() => _finish = v ?? 'All Finishes'),
+            )),
+          ]),
           const SizedBox(height: 4),
           if (suggestions.isNotEmpty) ...[
             const SizedBox(height: 4),

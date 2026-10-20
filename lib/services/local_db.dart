@@ -17,13 +17,14 @@ class LocalDb {
     final path = join(await getDatabasesPath(), 'gokula_inventory.db');
     _db = await openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: (db, version) async {
         await _createInventory(db);
         await _createSales(db);
         await _createMasters(db);
         await _createReturns(db);
         await _createSyncDeletions(db);
+        await _createInventoryTombstones(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) await _createSales(db);
@@ -31,6 +32,7 @@ class LocalDb {
         if (oldVersion < 4) await _createReturns(db);
         if (oldVersion < 5) await _createSyncDeletions(db);
         if (oldVersion < 6) await _upgradeToV6(db);
+        if (oldVersion < 7) await _createInventoryTombstones(db);
       },
     );
     return _db!;
@@ -452,6 +454,7 @@ class LocalDb {
   Future<void> upsertCloud(Map<String, dynamic> cloud, {String? cachedLocalImage}) async {
     final db = await database;
     final uid = (cloud['client_uid'] ?? 'cloud-${cloud['id']}').toString();
+    if (await isInventoryTombstoned(uid)) return;
     final existing = await db.query('inventory', where: 'client_uid=?', whereArgs: [uid], limit: 1);
     final preservedLocalImage = cachedLocalImage ?? (existing.isEmpty ? '' : (existing.first['local_image'] ?? '').toString());
     final values = {
@@ -476,6 +479,34 @@ class LocalDb {
     }
   }
 
+
+  // Permanent local inventory deletion markers. Do not clear on sync success.
+  Future<void> _createInventoryTombstones(Database db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS inventory_tombstones (
+      client_uid TEXT PRIMARY KEY,
+      deleted_at TEXT NOT NULL
+    )''');
+  }
+
+  Future<void> applyRemoteInventoryDeletion(String clientUid) async {
+    if (clientUid.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert('inventory_tombstones', {
+        'client_uid': clientUid,
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await txn.delete('inventory', where: 'client_uid=?', whereArgs: [clientUid]);
+    });
+  }
+
+  Future<bool> isInventoryTombstoned(String clientUid) async {
+    final db = await database;
+    final rows = await db.query('inventory_tombstones',
+        columns: ['client_uid'], where: 'client_uid=?',
+        whereArgs: [clientUid], limit: 1);
+    return rows.isNotEmpty;
+  }
 
   Future<void> deleteInventory(InventoryItem item) async {
     if (item.id == null) return;

@@ -91,32 +91,41 @@ class SyncService {
       var salesDownloaded = 0;
       var returnsDownloaded = 0;
 
+      // Apply remote inventory tombstones BEFORE uploading pending inventory.
+      // This prevents a stale second phone from resurrecting a deleted design.
+      final remoteInventoryDeletes = await client.from('sync_tombstones')
+          .select('entity_uid, entity_key').eq('entity_type', 'inventory');
+      for (final raw in remoteInventoryDeletes) {
+        final uid = (raw['entity_uid'] ?? raw['entity_key'] ?? '').toString();
+        await LocalDb.instance.applyRemoteInventoryDeletion(uid);
+      }
+
       final pendingInventory = await LocalDb.instance.pendingInventory();
 
       for (final item in pendingInventory) {
         if (item.deleted) {
           if (!isAdmin) return 'Inventory sync error: only Admin can delete inventory.';
-          final existing = await client
-              .from('inventory')
-              .select('id')
-              .eq('client_uid', item.clientUid)
-              .limit(1);
-
-          if (existing.isNotEmpty) {
-            await client
-                .from('inventory')
-                .delete()
-                .eq('client_uid', item.clientUid);
-          }
-
-          if (item.id != null) {
-            await LocalDb.instance.markSynced(
-              item.id!,
-              item.cloudId,
-              imageUrl: item.imageUrl,
-            );
-          }
+          // Write deletion history first; a second phone must see this marker.
+          await client.from('sync_tombstones').upsert({
+            'entity_type': 'inventory',
+            'entity_uid': item.clientUid,
+            'entity_key': item.clientUid,
+            'deleted_at': DateTime.now().toUtc().toIso8601String(),
+            'created_by': client.auth.currentUser?.id,
+          }, onConflict: 'entity_type,entity_key');
+          final proof = await client.from('sync_tombstones')
+              .select('entity_key').eq('entity_type', 'inventory')
+              .eq('entity_key', item.clientUid).limit(1);
+          if (proof.isEmpty) return 'Inventory deletion could not be confirmed remotely.';
+          await client.from('inventory').delete().eq('client_uid', item.clientUid);
+          final remaining = await client.from('inventory')
+              .select('id').eq('client_uid', item.clientUid).limit(1);
+          if (remaining.isNotEmpty) return 'Inventory deletion was blocked on server.';
+          await LocalDb.instance.applyRemoteInventoryDeletion(item.clientUid);
           inventoryUploaded++;
+          continue;
+        }
+        if (await LocalDb.instance.isInventoryTombstoned(item.clientUid)) {
           continue;
         }
 
@@ -263,6 +272,8 @@ class SyncService {
             syncUid: uid,
             invoiceNo: key,
           );
+        } else if (type == 'inventory') {
+          await LocalDb.instance.applyRemoteInventoryDeletion(uid.isNotEmpty ? uid : key);
         } else if (type == 'return') {
           await LocalDb.instance.applyRemoteReturnDeletion(
             syncUid: uid,

@@ -1,4 +1,8 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:excel/excel.dart' as xl;
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:printing/printing.dart';
@@ -23,6 +27,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   List<InventoryItem> items = [];
   bool loading = true;
   bool isAdmin = false;
+  List<InventoryItem> _visibleItems = [];
 
   @override
   void initState() {
@@ -39,6 +44,44 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<void> load() async {
     items = await LocalDb.instance.inventory();
     if (mounted) setState(() => loading = false);
+  }
+
+  Future<void> exportVisiblePdf() async {
+    if (_visibleItems.isEmpty) return;
+    final file = await StockReportService.createImageWiseReport(
+        List<InventoryItem>.of(_visibleItems), preserveOrder: true);
+    await Printing.sharePdf(bytes: await file.readAsBytes(),
+        filename: 'Gokula_Filtered_Inventory.pdf');
+  }
+
+  Future<void> exportExcel({required bool visibleOnly}) async {
+    final rows = visibleOnly ? _visibleItems : items;
+    final workbook = xl.Excel.createExcel();
+    final sheet = workbook['Inventory'];
+    sheet.appendRow(['Design', 'Size', 'Finish', 'Stock', 'Price', 'Total Value']
+        .map((v) => xl.TextCellValue(v)).toList());
+    num totalStock = 0, totalValue = 0;
+    for (final item in rows) {
+      totalStock += item.stock;
+      totalValue += item.stock * item.price;
+      sheet.appendRow([
+        xl.TextCellValue(item.tileName), xl.TextCellValue(item.size),
+        xl.TextCellValue(item.texture), xl.IntCellValue(item.stock),
+        xl.DoubleCellValue(item.price),
+        xl.DoubleCellValue(item.stock * item.price),
+      ]);
+    }
+    sheet.appendRow([
+      xl.TextCellValue('TOTAL'), xl.TextCellValue(''), xl.TextCellValue(''),
+      xl.IntCellValue(totalStock.toInt()), xl.TextCellValue(''),
+      xl.DoubleCellValue(totalValue.toDouble()),
+    ]);
+    final bytes = workbook.encode();
+    if (bytes == null) throw StateError('Could not encode Excel file');
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/Gokula_Inventory_${visibleOnly ? 'Filtered' : 'All'}.xlsx');
+    await file.writeAsBytes(bytes, flush: true);
+    await Share.shareXFiles([XFile(file.path)], text: 'Gokula Inventory Excel');
   }
 
   Future<void> exportImageWiseReport() async {
@@ -653,6 +696,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
               );
             },
           ),
+        PopupMenuButton<String>(
+          tooltip: 'Export inventory',
+          icon: const Icon(Icons.file_download_outlined),
+          onSelected: (v) async {
+            if (v == 'pdf') await exportVisiblePdf();
+            if (v == 'excel_visible') await exportExcel(visibleOnly: true);
+            if (v == 'excel_all') await exportExcel(visibleOnly: false);
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'pdf', child: Text('PDF – visible inventory')),
+            PopupMenuItem(value: 'excel_visible', child: Text('Excel – visible inventory')),
+            PopupMenuItem(value: 'excel_all', child: Text('Excel – all inventory')),
+          ],
+        ),
         IconButton(
           onPressed: exportImageWiseReport,
           tooltip: 'Export image-wise report',
@@ -672,6 +729,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         : InventorySearchList(
             items: items,
             isAdmin: isAdmin,
+            onVisibleChanged: (visible) => _visibleItems = visible,
             onRefresh: load,
             onEdit: itemDialog,
             onDelete: deleteItem,

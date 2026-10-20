@@ -8,7 +8,7 @@ import 'package:printing/printing.dart';
 import '../models/inventory_item.dart';
 
 class StockReportService {
-  static Future<File> createImageWiseReport(List<InventoryItem> items) async {
+  static Future<File> createImageWiseReport(List<InventoryItem> items, {bool preserveOrder = false}) async {
     final document = pw.Document();
     final rows = <_ReportRow>[];
 
@@ -27,7 +27,7 @@ class StockReportService {
       rows.add(_ReportRow(item, image));
     }
 
-    rows.sort((a, b) {
+    if (!preserveOrder) rows.sort((a, b) {
       final sizeComparison = _compareSizes(a.item.size, b.item.size);
       if (sizeComparison != 0) return sizeComparison;
       return a.item.tileName.toLowerCase().compareTo(b.item.tileName.toLowerCase());
