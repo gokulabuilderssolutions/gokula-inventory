@@ -405,7 +405,8 @@ class SyncService {
           final changed = await LocalDb.instance.upsertCloudSale(cloudSale);
           if (changed) salesDownloaded++;
         }
-        await LocalDb.instance.pruneSyncedSales(cloudSaleUids);
+        // Preserve synced invoices absent from this cloud response.
+        // Only explicit, authorized tombstones may remove records.
       } catch (e) {
         return 'Sales sync error: $e';
       }
@@ -559,7 +560,8 @@ class SyncService {
           );
           if (changed) returnsDownloaded++;
         }
-        await LocalDb.instance.pruneSyncedReturns(cloudReturnUids);
+        // Preserve synced returns absent from this cloud response.
+        // Only explicit, authorized tombstones may remove records.
       } catch (e) {
         return 'Returns sync error: $e';
       }

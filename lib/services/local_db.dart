@@ -615,11 +615,18 @@ class LocalDb {
       } else {
         saleId = existing.first['id'] as int;
         await txn.update('sales', values, where: 'id=?', whereArgs: [saleId]);
-        await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
+        // Do not erase invoice details unless cloud provides usable line data.
       }
 
       final rawLines = cloud['lines'];
-      if (rawLines is List) {
+      if (existing.isNotEmpty && rawLines is List && rawLines.isNotEmpty) {
+        // Preserve local details if cloud references cannot be resolved.
+        // Existing line items are retained rather than destructively replaced.
+      }
+      final existingLineCount = (await txn.rawQuery(
+        'SELECT COUNT(*) AS n FROM sale_lines WHERE sale_id=?', [saleId],
+      )).first['n'] as int? ?? 0;
+      if (rawLines is List && existingLineCount == 0) {
         for (final raw in rawLines) {
           if (raw is! Map) continue;
           final line = Map<String, dynamic>.from(raw);
@@ -1120,33 +1127,9 @@ class LocalDb {
     });
   }
 
+  // Disabled: absence from a cloud response is not proof of deletion.
   Future<void> pruneSyncedSales(Set<String> cloudUids) async {
-    final db = await database;
-    final rows = await db.query(
-      'sales',
-      columns: ['id', 'sync_uid'],
-      where: "sync_state='synced' AND sync_uid<>''",
-    );
-    for (final row in rows) {
-      final uid = (row['sync_uid'] ?? '').toString();
-      if (uid.isNotEmpty && !cloudUids.contains(uid)) {
-        final saleId = (row['id'] as num).toInt();
-        final pendingReturns = Sqflite.firstIntValue(
-              await db.rawQuery(
-                "SELECT COUNT(*) FROM returns WHERE sale_id=? AND sync_state='pending'",
-                [saleId],
-              ),
-            ) ??
-            0;
-        if (pendingReturns > 0) continue;
-        await db.transaction((txn) async {
-          await txn.delete('return_lines', where: 'sale_id=?', whereArgs: [saleId]);
-          await txn.delete('returns', where: 'sale_id=? AND sync_state=\'synced\'', whereArgs: [saleId]);
-          await txn.delete('sale_lines', where: 'sale_id=?', whereArgs: [saleId]);
-          await txn.delete('sales', where: 'id=?', whereArgs: [saleId]);
-        });
-      }
-    }
+    // Explicit admin tombstones are handled separately.
   }
 
   Future<List<Map<String, Object?>>> pendingSalesWithLines() async {
@@ -1844,23 +1827,9 @@ class LocalDb {
     );
   }
 
+  // Disabled: absence from a cloud response is not proof of deletion.
   Future<void> pruneSyncedReturns(Set<String> cloudUids) async {
-    final db = await database;
-    final rows = await db.query(
-      'returns',
-      columns: ['id', 'sync_uid'],
-      where: "sync_state='synced' AND sync_uid<>''",
-    );
-    for (final row in rows) {
-      final uid = (row['sync_uid'] ?? '').toString();
-      if (uid.isNotEmpty && !cloudUids.contains(uid)) {
-        final returnId = (row['id'] as num).toInt();
-        await db.transaction((txn) async {
-          await txn.delete('return_lines', where: 'return_id=?', whereArgs: [returnId]);
-          await txn.delete('returns', where: 'id=?', whereArgs: [returnId]);
-        });
-      }
-    }
+    // Explicit admin tombstones are handled separately.
   }
 
   Future<void> markReturnSynced(int id) async {
