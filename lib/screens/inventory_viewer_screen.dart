@@ -24,8 +24,9 @@ class _InventoryViewerScreenState extends State<InventoryViewerScreen> {
     if (mounted) setState(() { _loading = true; _error = null; });
     try {
       final profile = await AuthService().currentProfile();
+      final role = (profile?['role'] ?? '').toString().trim().toLowerCase();
       if (profile == null || profile['is_active'] != true ||
-          profile['role'] != 'inventory_viewer') {
+          (role != 'viewer' && role != 'inventory_viewer')) {
         throw StateError('Viewer access not authorized');
       }
       // Supabase defaults to a 1,000-row response; page to include all designs.
@@ -40,7 +41,13 @@ class _InventoryViewerScreenState extends State<InventoryViewerScreen> {
       }
       if (mounted) setState(() { _items = rows; _loading = false; });
     } catch (error) {
-      if (mounted) setState(() { _error = 'Unable to load inventory. Check internet and access permissions.'; _loading = false; });
+      debugPrint('INVENTORY_VIEWER_ERROR: $error');
+      if (mounted) {
+        setState(() {
+          _error = 'Unable to load inventory. Please retry.';
+          _loading = false;
+        });
+      }
     }
   }
 
