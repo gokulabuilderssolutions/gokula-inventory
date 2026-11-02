@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/inventory_viewer_screen.dart';
+import 'services/auth_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +46,27 @@ class AuthGate extends StatelessWidget {
       stream: Supabase.instance.client.auth.onAuthStateChange,
       builder: (context, snapshot) {
         final session = Supabase.instance.client.auth.currentSession;
-        return session == null ? const LoginScreen() : const HomeScreen();
+        if (session == null) return const LoginScreen();
+        return FutureBuilder<Map<String, dynamic>?>(
+          key: ValueKey(session.user.id),
+          future: AuthService().currentProfile(),
+          builder: (context, profileSnapshot) {
+            if (profileSnapshot.hasError) {
+              return const Scaffold(body: Center(child: Text('Unable to verify account permissions. Check connection.')));
+            }
+            if (!profileSnapshot.hasData) {
+              return const Scaffold(body: Center(child: CircularProgressIndicator()));
+            }
+            final profile = profileSnapshot.data;
+            if (profile == null || profile['is_active'] != true) {
+              return const Scaffold(body: Center(child: Text('Account inactive or not configured. Please sign out and contact Admin.')));
+            }
+            final role = (profile['role'] ?? '').toString().toLowerCase();
+            if (role == 'viewer' || role == 'inventory_viewer') return const InventoryViewerScreen();
+            if (role == 'admin' || role == 'user') return const HomeScreen();
+            return const Scaffold(body: Center(child: Text('Account role not recognized.')));
+          },
+        );
       },
     );
   }
